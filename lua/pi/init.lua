@@ -205,6 +205,16 @@ function M.toggle_startup_details()
     end
 end
 
+--- Toggle all expandable history blocks.
+---@return boolean changed
+function M.toggle_history_blocks()
+    local session = require("pi.sessions.manager").get()
+    if not session then
+        return false
+    end
+    return session.chat:toggle_history_blocks()
+end
+
 --- Cycle to the next thinking level.
 function M.cycle_thinking_level()
     local session = require("pi.sessions.manager").get()

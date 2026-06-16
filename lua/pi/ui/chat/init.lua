@@ -917,6 +917,12 @@ function Chat:toggle_startup_block(check_cursor)
     return self._history:toggle_startup_block(check_cursor)
 end
 
+--- Toggle all expandable history blocks
+---@return boolean changed
+function Chat:toggle_history_blocks()
+    return self._history:toggle_blocks_expanded()
+end
+
 function Chat:clear()
     self._streaming = false
     self._compacting = false

@@ -22,6 +22,7 @@
 ---@field _thinking_blocks pi.ThinkingBlock[]
 ---@field _tool_blocks table<string, pi.ToolBlock>
 ---@field _compaction_blocks pi.CompactionBlock[]
+---@field _blocks_expanded boolean
 ---@field _placeholder_extmark integer?
 ---@field _placeholder_mode? "loading"
 ---@field _has_conversation_content boolean
@@ -418,6 +419,7 @@ function History.new(tab)
     self._thinking_blocks = {}
     self._tool_blocks = {}
     self._compaction_blocks = {}
+    self._blocks_expanded = false
     self._placeholder_extmark = nil
     self._placeholder_mode = nil
     self._has_conversation_content = false
@@ -1476,8 +1478,19 @@ function History:toggle_startup_block(check_cursor)
             return false
         end
     end
-    self._startup_block_expanded = not self._startup_block_expanded
-    self:_render_startup_block(false)
+    return self:_set_startup_block_expanded(not self._startup_block_expanded)
+end
+
+---@param expanded boolean
+---@return boolean changed
+function History:_set_startup_block_expanded(expanded)
+    if self._startup_block_expanded == expanded then
+        return false
+    end
+    self._startup_block_expanded = expanded
+    if self._startup_block_compact_lines and self._startup_block_expanded_lines then
+        self:_render_startup_block(false)
+    end
     return true
 end
 
@@ -1552,7 +1565,7 @@ function History:_append_compaction_summary(summary, tokens_before)
         tokens_before = tokens_before,
         anchor = 0,
         line_count = 0,
-        expanded = false,
+        expanded = self._blocks_expanded,
     }
     local lines, marks = self:_build_compaction_lines(block)
     local start = self:_append_lines(lines)
@@ -1571,6 +1584,18 @@ function History:append_compaction_summary(summary, tokens_before)
     end)
 end
 
+---@param block pi.CompactionBlock
+---@param expanded boolean
+---@return boolean changed
+function History:_set_compaction_block_expanded(block, expanded)
+    if block.expanded == expanded then
+        return false
+    end
+    block.expanded = expanded
+    self:_replace_compaction_block(block)
+    return true
+end
+
 ---@return boolean toggled
 function History:toggle_compaction_block()
     local win = self:win()
@@ -1582,9 +1607,7 @@ function History:toggle_compaction_block()
         local pos = vim.api.nvim_buf_get_extmark_by_id(self._buf, ns, block.anchor, {})
         local start_row = pos[1]
         if start_row and cursor_row >= start_row and cursor_row < start_row + block.line_count then
-            block.expanded = not block.expanded
-            self:_replace_compaction_block(block)
-            return true
+            return self:_set_compaction_block_expanded(block, not block.expanded)
         end
     end
     return false
@@ -1949,6 +1972,11 @@ function History:_maybe_collapse_tool(tool_call_id)
     block.collapsed_inner_lines = collapsed
     block.collapsed_specs = specs
 
+    if self._blocks_expanded then
+        block.expanded = true
+        return
+    end
+
     -- Replace inner content
     vim.api.nvim_buf_clear_namespace(self._buf, ns, inner_start, footer_row)
     self:_with_modifiable(function()
@@ -1957,6 +1985,43 @@ function History:_maybe_collapse_tool(tool_call_id)
     Tools.apply_collapsed_extmarks(self, inner_start, specs, collapsed)
 
     block.expanded = false
+end
+
+---@param target_block pi.ToolBlock
+---@param expanded boolean
+---@return boolean changed true if a tool block was changed
+function History:_set_tool_block_expanded(target_block, expanded)
+    if not target_block.end_extmark or not target_block.collapsed_inner_lines then
+        return false
+    end
+    if target_block.expanded == expanded then
+        return false
+    end
+
+    local header_row = vim.api.nvim_buf_get_extmark_by_id(self._buf, ns, target_block.icon_extmark, {})[1]
+    local footer_row = vim.api.nvim_buf_get_extmark_by_id(self._buf, ns, target_block.end_extmark, {})[1]
+    if not header_row or not footer_row then
+        return false
+    end
+    local inner_start = header_row + 1
+
+    vim.api.nvim_buf_clear_namespace(self._buf, ns, inner_start, footer_row)
+    self:_with_modifiable(function()
+        if expanded then
+            vim.api.nvim_buf_set_lines(self._buf, inner_start, footer_row, false, target_block.expanded_inner_lines)
+            restore_extmarks(self._buf, ns, inner_start, target_block.expanded_inner_extmarks)
+        else
+            vim.api.nvim_buf_set_lines(self._buf, inner_start, footer_row, false, target_block.collapsed_inner_lines)
+            Tools.apply_collapsed_extmarks(
+                self,
+                inner_start,
+                target_block.collapsed_specs,
+                target_block.collapsed_inner_lines
+            )
+        end
+    end)
+    target_block.expanded = expanded
+    return true
 end
 
 --- Toggle expand/collapse for the tool block under the cursor.
@@ -1969,44 +2034,71 @@ function History:toggle_tool_block()
     local cursor_row = vim.api.nvim_win_get_cursor(win)[1] - 1 -- 0-indexed
 
     -- Find the block containing the cursor
-    local target_block
     for _, block in pairs(self._tool_blocks) do
         if block.end_extmark and block.collapsed_inner_lines then
             local h = vim.api.nvim_buf_get_extmark_by_id(self._buf, ns, block.icon_extmark, {})[1]
             local f = vim.api.nvim_buf_get_extmark_by_id(self._buf, ns, block.end_extmark, {})[1]
-            if cursor_row >= h and cursor_row <= f then
-                target_block = block
-                break
+            if h and f and cursor_row >= h and cursor_row <= f then
+                return self:_set_tool_block_expanded(block, not block.expanded)
             end
         end
     end
 
-    if not target_block then
-        return false
+    return false
+end
+
+---@return boolean expanded true when all currently toggleable blocks are expanded
+function History:_all_blocks_expanded()
+    local saw_block = false
+
+    if self._startup_block_compact_lines and self._startup_block_expanded_lines then
+        saw_block = true
+        if not self._startup_block_expanded then
+            return false
+        end
     end
 
-    local header_row = vim.api.nvim_buf_get_extmark_by_id(self._buf, ns, target_block.icon_extmark, {})[1]
-    local footer_row = vim.api.nvim_buf_get_extmark_by_id(self._buf, ns, target_block.end_extmark, {})[1]
-    local inner_start = header_row + 1
-
-    vim.api.nvim_buf_clear_namespace(self._buf, ns, inner_start, footer_row)
-    self:_with_modifiable(function()
-        if target_block.expanded then
-            vim.api.nvim_buf_set_lines(self._buf, inner_start, footer_row, false, target_block.collapsed_inner_lines)
-            Tools.apply_collapsed_extmarks(
-                self,
-                inner_start,
-                target_block.collapsed_specs,
-                target_block.collapsed_inner_lines
-            )
-            target_block.expanded = false
-        else
-            vim.api.nvim_buf_set_lines(self._buf, inner_start, footer_row, false, target_block.expanded_inner_lines)
-            restore_extmarks(self._buf, ns, inner_start, target_block.expanded_inner_extmarks)
-            target_block.expanded = true
+    for _, block in ipairs(self._compaction_blocks) do
+        saw_block = true
+        if not block.expanded then
+            return false
         end
-    end)
-    return true
+    end
+
+    for _, block in pairs(self._tool_blocks) do
+        if block.end_extmark and block.collapsed_inner_lines then
+            saw_block = true
+            if not block.expanded then
+                return false
+            end
+        end
+    end
+
+    return saw_block and true or self._blocks_expanded
+end
+
+--- Set the global expanded state for history blocks.
+---@param expanded boolean
+---@return boolean changed true if any block state changed
+function History:set_blocks_expanded(expanded)
+    self._blocks_expanded = expanded
+    local changed = self:_set_startup_block_expanded(expanded)
+
+    for _, block in ipairs(self._compaction_blocks) do
+        changed = self:_set_compaction_block_expanded(block, expanded) or changed
+    end
+
+    for _, block in pairs(self._tool_blocks) do
+        changed = self:_set_tool_block_expanded(block, expanded) or changed
+    end
+
+    return changed
+end
+
+--- Toggle the global expanded state for history blocks.
+---@return boolean changed true if any block state changed
+function History:toggle_blocks_expanded()
+    return self:set_blocks_expanded(not self:_all_blocks_expanded())
 end
 
 ---@param tool_name string
@@ -2285,6 +2377,7 @@ function History:clear()
     self._thinking_blocks = {}
     self._tool_blocks = {}
     self._compaction_blocks = {}
+    self._blocks_expanded = false
     self._has_conversation_content = false
     self._startup_block_line_count = 0
     self._startup_block_expanded = Config.options.expand_startup_details

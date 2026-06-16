@@ -1,5 +1,9 @@
 # Changelog
 
+## 2026-06-16
+
+- **ADDED:** Add `pi.toggle_history_blocks()` to expand/collapse all expandable history blocks.
+
 ## 2026-06-15
 
 - **BREAKING:** Replace `setup({ bin = "pi" })` with `setup({ cli = { bin = "pi", args = {} } })`.

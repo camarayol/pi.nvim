@@ -423,6 +423,7 @@ vim.api.nvim_create_autocmd("FileType", {
     callback = function(event)
         map(event.buf, "<C-q>", "<Cmd>PiToggleChat<CR>")
         map(event.buf, "<M-c>", "<Cmd>PiAbort<CR>")
+        map(event.buf, "<C-o>", pi.toggle_history_blocks)
     end,
 })
 
@@ -1210,6 +1211,8 @@ Every full-block tool has two collapse thresholds:
 
 When a tool's input or output exceeds its threshold, the block is auto-collapsed on first render. You can toggle between the collapsed and fully-expanded view with `<Tab>` while the cursor is on the block in the history buffer. The same `<Tab>` also toggles the [Startup block](#startup-block) when the cursor is on that instead — pi.nvim dispatches based on what you're hovering over.
 
+Bind `pi.toggle_history_blocks()` to expand/collapse all expandable history blocks at once; the [Keymaps](#keymaps) example uses `<C-o>`.
+
 Built-in thresholds:
 
 | Tool | `input_visible` | `output_visible` | Notes |
@@ -1624,8 +1627,9 @@ pi.toggle_thinking()          -- show/hide thinking blocks in the history
 pi.cycle_thinking_level()     -- step to the next thinking level
 pi.select_thinking_level()    -- dialog: pick a thinking level
 
--- Startup block
+-- History blocks
 pi.toggle_startup_details()   -- collapse/expand the startup block
+pi.toggle_history_blocks()    -- collapse/expand all expandable history blocks
 
 -- Attention queue
 pi.attention()                -- open the oldest queued request, switching tab if needed
