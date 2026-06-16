@@ -364,6 +364,30 @@ require("pi").setup({
 })
 ```
 
+### Project trust
+
+`pi.nvim` runs pi in RPC mode and does not currently implement the TUI's interactive project trust prompt or save trust decisions. It uses pi's non-interactive defaults, which means project-local settings, resources, packages, extensions, and project `.agents/skills` are not loaded.
+
+To trust project-local pi files when using `pi.nvim`, either pass pi's trust flag through `cli.args`:
+
+```lua
+require("pi").setup({
+    cli = {
+        args = { "--approve" },
+    },
+})
+```
+
+or set the global pi default in `~/.pi/agent/settings.json`:
+
+```json
+{
+  "defaultProjectTrust": "always"
+}
+```
+
+If you need interactive trust handling in `pi.nvim`, please open an issue.
+
 ## Keymaps
 
 `pi.nvim` intentionally ships with a very small default keymap set. Keymaps tend to be highly personal, and many users already have their own conventions, leader-based layouts, or other mapping systems. Pi tries to provide the API and a few sensible defaults, while leaving the final keymap design to you.
