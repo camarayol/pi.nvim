@@ -4,11 +4,13 @@
 local M = {}
 
 local Config = require("pi.config")
+local Dialog = require("pi.ui.dialog")
 local Keys = require("pi.keys")
 local Notify = require("pi.notify")
 local Highlights = require("pi.ui.highlights")
 
 local DEFAULT_DIFF_CONTEXT = 6
+local note_ns = vim.api.nvim_create_namespace("pi-diff-review-notes")
 
 ---@return string[]
 local function diffopt_items()
@@ -239,9 +241,54 @@ local function apply_edits(lines, edits)
     return vim.split(table.concat(parts), "\n", { plain = true })
 end
 
+---@class pi.DiffReviewNote
+---@field buf integer
+---@field mark_id integer
+---@field side "current"|"proposed"
+---@field note string
+
+---@param note string
+---@return string
+local function note_preview(note)
+    local first = vim.split(note, "\n", { plain = true })[1] or ""
+    if vim.fn.strdisplaywidth(first) > 80 then
+        return vim.fn.strcharpart(first, 0, 77) .. "…"
+    end
+    return first
+end
+
+---@param note string
+---@return pi.CustomBlockLine[]
+local function note_virt_lines(note)
+    local lines = {}
+    for _, line in ipairs(vim.split(note, "\n", { plain = true })) do
+        lines[#lines + 1] = { { "  │ " .. line, "PiDiffReviewNote" } }
+    end
+    return lines
+end
+
+---@param buf integer
+---@param row integer
+---@param note string
+---@param id? integer
+---@return integer
+local function set_note_mark(buf, row, note, id)
+    local icon = Config.options.diff.icons.note
+    local opts = {
+        id = id,
+        virt_lines = note_virt_lines(note),
+        priority = 200,
+    }
+    if icon then
+        opts.sign_text = icon
+        opts.sign_hl_group = "PiDiffReviewNote"
+    end
+    return vim.api.nvim_buf_set_extmark(buf, note_ns, row, 0, opts)
+end
+
 --- Open a diff review for a tool call.
 ---@param payload { prompt: string, toolName: string, toolInput: table }
----@param callback fun(result: string) Called with "Accept", json-encoded AcceptModified, or "Reject"
+---@param callback fun(result: string) Called with json-encoded review result, or "Reject" for no-note rejection/backcompat
 ---@param opts? { timeout?: integer, on_timeout?: fun() }
 function M.open(payload, callback, opts)
     opts = opts or {}
@@ -308,6 +355,7 @@ function M.open(payload, callback, opts)
     local diff_context_config = Config.options.diff.context
     local initial_context = diff_context_config.base or diff_context()
     local context_step = math.max(1, diff_context_config.step or 5)
+    local notes = {} ---@type pi.DiffReviewNote[]
 
     set_diff_context(initial_context)
 
@@ -392,11 +440,17 @@ function M.open(payload, callback, opts)
     local diff_keys = Config.options.diff.keys
     local accept_keys = Keys.resolve(diff_keys.accept)
     local reject_keys = Keys.resolve(diff_keys.reject)
+    local edit_note_keys = Keys.resolve(diff_keys.edit_note)
+    local delete_note_keys = Keys.resolve(diff_keys.delete_note)
+    local list_notes_keys = Keys.resolve(diff_keys.list_notes)
     local expand_context_keys = Keys.resolve(diff_keys.expand_context)
     local shrink_context_keys = Keys.resolve(diff_keys.shrink_context)
     -- Winbar hint shows the first key of each action.
     local accept_lhs = accept_keys[1] and Keys.lhs(accept_keys[1]) or ""
     local reject_lhs = reject_keys[1] and Keys.lhs(reject_keys[1]) or ""
+    local edit_note_lhs = edit_note_keys[1] and Keys.lhs(edit_note_keys[1]) or ""
+    local delete_note_lhs = delete_note_keys[1] and Keys.lhs(delete_note_keys[1]) or ""
+    local list_notes_lhs = list_notes_keys[1] and Keys.lhs(list_notes_keys[1]) or ""
     local expand_context_lhs = expand_context_keys[1] and Keys.lhs(expand_context_keys[1]) or ""
     local shrink_context_lhs = shrink_context_keys[1] and Keys.lhs(shrink_context_keys[1]) or ""
     vim.wo[left_win].winbar = "%#PiDiffWinbar# %#PiDiffWinbarCurrent#CURRENT: " .. rel_path .. "%#PiDiffWinbar#"
@@ -407,6 +461,12 @@ function M.open(payload, callback, opts)
         .. "=accept  "
         .. reject_lhs
         .. "=reject  "
+        .. edit_note_lhs
+        .. "=note  "
+        .. delete_note_lhs
+        .. "=del-note  "
+        .. list_notes_lhs
+        .. "=notes  "
         .. expand_context_lhs
         .. "=expand  "
         .. shrink_context_lhs
@@ -419,6 +479,198 @@ function M.open(payload, callback, opts)
         local next_context = math.max(initial_context, diff_context() + delta)
         set_diff_context(next_context)
         refresh_diff_windows(left_win, right_win)
+    end
+
+    ---@param buf integer
+    ---@return "current"|"proposed"?
+    local function note_side(buf)
+        if buf == before_buf then
+            return "current"
+        elseif buf == after_buf then
+            return "proposed"
+        end
+        return nil
+    end
+
+    ---@param entry pi.DiffReviewNote
+    ---@return integer?
+    local function note_row(entry)
+        if not vim.api.nvim_buf_is_valid(entry.buf) then
+            return nil
+        end
+        local pos = vim.api.nvim_buf_get_extmark_by_id(entry.buf, note_ns, entry.mark_id, {})
+        return pos and pos[1] or nil
+    end
+
+    ---@param buf integer
+    ---@param row integer
+    ---@return pi.DiffReviewNote?
+    local function find_note_at(buf, row)
+        for _, entry in ipairs(notes) do
+            if entry.buf == buf and note_row(entry) == row then
+                return entry
+            end
+        end
+        return nil
+    end
+
+    ---@param entry pi.DiffReviewNote
+    local function delete_note(entry)
+        if vim.api.nvim_buf_is_valid(entry.buf) then
+            pcall(vim.api.nvim_buf_del_extmark, entry.buf, note_ns, entry.mark_id)
+        end
+        for i, existing in ipairs(notes) do
+            if existing == entry then
+                table.remove(notes, i)
+                break
+            end
+        end
+    end
+
+    ---@param entry pi.DiffReviewNote
+    local function refresh_note(entry)
+        local row = note_row(entry)
+        if row then
+            entry.mark_id = set_note_mark(entry.buf, row, entry.note, entry.mark_id)
+        end
+    end
+
+    local function edit_note()
+        local win = vim.api.nvim_get_current_win()
+        local buf = vim.api.nvim_win_get_buf(win)
+        local side = note_side(buf)
+        if not side then
+            Notify.warn("Move cursor to the current or proposed diff pane to add a review note")
+            return
+        end
+
+        local row = vim.api.nvim_win_get_cursor(win)[1] - 1
+        local existing = find_note_at(buf, row)
+        local title = (existing and "Edit" or "Add") .. " review note for " .. side .. " line " .. tostring(row + 1)
+
+        Dialog.input({
+            title = title,
+            default = existing and existing.note or "",
+        }, function(value)
+            if value == nil then
+                return
+            end
+            value = vim.trim(value)
+
+            if existing then
+                if value == "" then
+                    delete_note(existing)
+                else
+                    existing.note = value
+                    refresh_note(existing)
+                end
+                return
+            end
+
+            if value == "" then
+                return
+            end
+            local mark_id = set_note_mark(buf, row, value)
+            notes[#notes + 1] = {
+                buf = buf,
+                mark_id = mark_id,
+                side = side,
+                note = value,
+            }
+        end)
+    end
+
+    local function delete_note_at_cursor()
+        local win = vim.api.nvim_get_current_win()
+        local buf = vim.api.nvim_win_get_buf(win)
+        local side = note_side(buf)
+        if not side then
+            Notify.warn("Move cursor to the current or proposed diff pane to delete a review note")
+            return
+        end
+
+        local row = vim.api.nvim_win_get_cursor(win)[1] - 1
+        local existing = find_note_at(buf, row)
+        if not existing then
+            Notify.warn("No review note on this line")
+            return
+        end
+        delete_note(existing)
+    end
+
+    local function list_notes()
+        local options = {}
+        local option_entries = {}
+        for _, entry in ipairs(notes) do
+            local row = note_row(entry)
+            if row then
+                local label = tostring(#options + 1)
+                    .. ". "
+                    .. entry.side
+                    .. ":"
+                    .. tostring(row + 1)
+                    .. " "
+                    .. note_preview(entry.note)
+                options[#options + 1] = label
+                option_entries[label] = entry
+            end
+        end
+
+        if #options == 0 then
+            Notify.info("No review notes")
+            return
+        end
+
+        Dialog.select({ title = "Review notes", options = options }, function(choice)
+            local entry = choice and option_entries[choice] or nil
+            if not entry then
+                return
+            end
+            local row = note_row(entry)
+            local win = entry.buf == before_buf and left_win or right_win
+            if row and vim.api.nvim_win_is_valid(win) then
+                vim.api.nvim_set_current_win(win)
+                vim.api.nvim_win_set_cursor(win, { row + 1, 0 })
+            end
+        end)
+    end
+
+    ---@return table[]
+    local function collect_notes()
+        local collected = {}
+        for _, entry in ipairs(notes) do
+            local row = note_row(entry)
+            if row and vim.api.nvim_buf_is_valid(entry.buf) then
+                local line = vim.api.nvim_buf_get_lines(entry.buf, row, row + 1, false)[1] or ""
+                collected[#collected + 1] = {
+                    path = path,
+                    side = entry.side,
+                    line = row + 1,
+                    lineText = line,
+                    note = entry.note,
+                }
+            end
+        end
+        table.sort(collected, function(a, b)
+            if a.side == b.side then
+                return a.line < b.line
+            end
+            return a.side < b.side
+        end)
+        return collected
+    end
+
+    ---@param result string
+    ---@param extra? table
+    ---@param review_notes table[]
+    ---@return string
+    local function encode_result(result, extra, review_notes)
+        extra = extra or {}
+        extra.result = result
+        if #review_notes > 0 then
+            extra.notes = review_notes
+        end
+        return vim.json.encode(extra)
     end
 
     local function close_review_tab()
@@ -494,21 +746,21 @@ function M.open(payload, callback, opts)
             final_lines[#final_lines + 1] = ""
         end
 
+        local review_notes = collect_notes()
         write_file(path, final_lines)
         require("pi.cache.files").invalidate()
         reload_buf_for_file(vim.fn.fnamemodify(path, ":p"))
         close_review_tab()
 
         if modified then
-            callback(vim.json.encode({
-                result = "AcceptModified",
+            callback(encode_result("AcceptModified", {
                 content = table.concat(final_lines, "\n"),
-            }))
+            }, review_notes))
         else
             -- Send structured JSON so the extension knows the plugin already
             -- applied the change (and should block the tool). The TUI sends
             -- plain "Accept" — the extension lets the tool run in that case.
-            callback(vim.json.encode({ result = "Accepted" }))
+            callback(encode_result("Accepted", nil, review_notes))
         end
     end
 
@@ -517,8 +769,13 @@ function M.open(payload, callback, opts)
             return
         end
         responded = true
+        local review_notes = collect_notes()
         close_review_tab()
-        callback("Reject")
+        if #review_notes > 0 then
+            callback(encode_result("Rejected", nil, review_notes))
+        else
+            callback("Reject")
+        end
     end
 
     if type(opts.timeout) == "number" and opts.timeout > 0 then
@@ -542,6 +799,15 @@ function M.open(payload, callback, opts)
         end
         for _, k in ipairs(reject_keys) do
             Keys.bind(b, k, reject, { desc = "Reject edit" })
+        end
+        for _, k in ipairs(edit_note_keys) do
+            Keys.bind(b, k, edit_note, { desc = "Add/edit review note" })
+        end
+        for _, k in ipairs(delete_note_keys) do
+            Keys.bind(b, k, delete_note_at_cursor, { desc = "Delete review note" })
+        end
+        for _, k in ipairs(list_notes_keys) do
+            Keys.bind(b, k, list_notes, { desc = "List review notes" })
         end
         for _, k in ipairs(expand_context_keys) do
             Keys.bind(b, k, function()

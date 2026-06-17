@@ -290,6 +290,10 @@ require("pi").setup({
 
     -- Diff review
     diff = {
+        icons = {
+            -- Icon/sign used for diff review notes. Set to false to omit it.
+            note = "󰆈",
+        },
         -- Visible context around each hunk.
         context = {
             -- Initial visible context around each hunk.
@@ -302,6 +306,9 @@ require("pi").setup({
         keys = {
             accept = "<Leader>da",
             reject = "<Leader>dr",
+            edit_note = "<Leader>dn",
+            delete_note = "<Leader>dx",
+            list_notes = "<Leader>dN",
             expand_context = "<Leader>de",
             shrink_context = "<Leader>ds",
         },
@@ -517,7 +524,7 @@ Each chat contains three panels:
 | `prompt` | `pi-chat-prompt` | Where you type the next message. Multi-line buffer. |
 | `attachments` | `pi-chat-attachments` | Pending image attachments queued for the next message. |
 
-The filetype names are stable — you can target them from your own `FileType` autocmds (see [Keymaps](#keymaps) for an example).
+The filetype names are stable — you can target them from your own `FileType` autocmds (see [Keymaps](#keymaps) for an example). Dialog buffers use the stable `pi-dialog` filetype, so completion plugins can be disabled there without affecting the prompt.
 
 Use `:PiToggleLayout` to swap `side` ↔ `float` without losing the conversation, and `:PiToggleChat` to hide and re-show the chat windows. Neither stops the agent. To actually shut down the underlying `pi --mode rpc` process for the current tab, use `:PiStop`.
 
@@ -883,14 +890,16 @@ When an `edit` or `write` tool is about to run, pi.nvim can intercept it and ope
 
 Once the diff is open:
 
-- **Left pane** — the current file content.
-- **Right pane** — the content the agent is proposing.
-- Both panes are normal editable buffers. You can modify the _right_ pane before accepting — anything you change there becomes the new content and pi.nvim will write your edited version instead of the agent's original proposal.
+- **Left pane** — the current file content, opened read-only.
+- **Right pane** — the content the agent is proposing. You can modify the _right_ pane before accepting — anything you change there becomes the new content and pi.nvim will write your edited version instead of the agent's original proposal.
 - **Accept** with `<Leader>da` (default) — or just `:w` the right pane.
 - **Reject** with `<Leader>dr`.
+- **Add/edit a review note** on the current line with `<Leader>dn`. Notes are review metadata: they show below the target line as virtual text with a vertical border, plus a configurable sign/icon on the target line. They are not inserted into the file. Set `diff.icons.note = false` to omit the icon/sign. Submitting an empty note deletes it.
+- **Delete a review note** on the current line with `<Leader>dx`.
+- **List review notes** with `<Leader>dN`; selecting an entry jumps to that noted line.
 - **Expand / shrink** the surrounding diff context with `<Leader>de` / `<Leader>ds`. The initial context comes from `diff.context.base` (or `'diffopt'` when unset), and the step size from `diff.context.step`.
 
-All keys are configurable under `diff.keys` using the [Key specs](#key-specs) format, so you can bind multiple keys, pin modes, or replace them entirely. The winbar of the proposed pane always shows the currently-bound keys for all four actions so you don't have to remember them.
+All keys are configurable under `diff.keys` using the [Key specs](#key-specs) format, so you can bind multiple keys, pin modes, or replace them entirely. The winbar of the proposed pane always shows the currently-bound keys for all review actions so you don't have to remember them.
 
 #### You need a permission extension
 
@@ -916,6 +925,21 @@ import type { ExtensionAPI } from "@mariozechner/pi-coding-agent"
 // Track which tool calls the user approved so we can flip the
 // blocked-isError flag back in a message_end handler.
 const approvedToolCalls = new Set<string>()
+
+type ReviewNote = {
+    path: string
+    side: "current" | "proposed"
+    line: number
+    lineText: string
+    note: string
+}
+
+function formatNotes(notes?: ReviewNote[]) {
+    if (!notes?.length) return ""
+    return "\n\nReview notes:\n" + notes.map((n) =>
+        `- ${n.side}:${n.line} ${JSON.stringify(n.lineText)}\n  ${n.note}`
+    ).join("\n")
+}
 
 export default function (pi: ExtensionAPI) {
     pi.on("tool_call", async (event, ctx) => {
@@ -956,7 +980,7 @@ export default function (pi: ExtensionAPI) {
                 approvedToolCalls.add(event.toolCallId)
                 return {
                     block: true,
-                    reason: `[accepted] User approved the edit. Changes applied to ${path} as proposed.`,
+                    reason: `[accepted] User approved the edit. Changes applied to ${path} as proposed.` + formatNotes(parsed.notes),
                 }
             }
 
@@ -966,13 +990,24 @@ export default function (pi: ExtensionAPI) {
                 return {
                     block: true,
                     reason:
-                        `[accepted] User approved with modifications. ${path} was updated with user's version, which differs from what you proposed. Current content of ${path}:\n` +
+                        `[accepted] User approved with modifications. ${path} was updated with user's version, which differs from what you proposed.` +
+                        formatNotes(parsed.notes) +
+                        `\n\nCurrent content of ${path}:\n` +
                         "```\n" + parsed.content + "\n```",
+                }
+            }
+
+            if (parsed.result === "Rejected") {
+                // Rejected with review notes: keep the file unchanged, but let
+                // the turn continue so the agent can address the feedback.
+                return {
+                    block: true,
+                    reason: `[rejected] User rejected the edit to ${path}. File unchanged.` + formatNotes(parsed.notes),
                 }
             }
         }
 
-        // Anything else — rejected.
+        // Rejected without review notes, cancelled, or unknown response: stop the turn.
         ctx.abort()
         return {
             block: true,
@@ -1027,9 +1062,22 @@ For `write`, replace `edits` with `"content": "<full file text>"`.
 | Value | Meaning | Extension should… |
 | --- | --- | --- |
 | `"Accept"` | Only returned by the pi TUI, not by pi.nvim. | Return `undefined` and let the tool run normally. |
-| `'{"result":"Accepted"}'` | User accepted. pi.nvim already wrote the file. | Return `{ block: true, reason: "[accepted] ..." }` so pi doesn't double-write. |
-| `'{"result":"AcceptModified","content":"..."}'` | User edited the proposal, then accepted. pi.nvim already wrote the modified version. | Return `{ block: true, reason: "[accepted] ..." }`, ideally including the modified content so the agent sees the final state. |
-| Anything else (`"Reject"`, `undefined`, cancellation) | User rejected. | Return `{ block: true, reason: "[rejected] ..." }`. |
+| `'{"result":"Accepted","notes":[...]}'` | User accepted. pi.nvim already wrote the file. `notes` is omitted when empty. | Return `{ block: true, reason: "[accepted] ..." }` so pi doesn't double-write. Include notes in `reason` when present. |
+| `'{"result":"AcceptModified","content":"...","notes":[...]}'` | User edited the proposal, then accepted. pi.nvim already wrote the modified version. `notes` is omitted when empty. | Return `{ block: true, reason: "[accepted] ..." }`, ideally including the modified content so the agent sees the final state. Include notes when present. |
+| `'{"result":"Rejected","notes":[...]}'` | User rejected with review notes. File unchanged. | Return `{ block: true, reason: "[rejected] ..." }` with the notes. Do **not** call `ctx.abort()` if you want the agent to continue and address the notes. |
+| Anything else (`"Reject"`, `undefined`, cancellation) | User rejected without notes. | Return `{ block: true, reason: "[rejected] ..." }`; call `ctx.abort()` if rejection should stop the turn. |
+
+Review notes are attached to the selected side and line at review time:
+
+```json
+{
+  "path": "/abs/path/to/file.ts",
+  "side": "current",
+  "line": 42,
+  "lineText": "const value = oldName()",
+  "note": "Keep this name; it is part of the public API."
+}
+```
 
 For `AcceptModified` specifically, it's important to surface the final content back to the agent — not just the fact that the edit was accepted. The proposal the agent made and the bytes that actually landed on disk are no longer the same, and if the agent assumes its proposal went through verbatim it will reason about a file state that doesn't exist. The reference extension uses a `reason` string along these lines:
 
@@ -1773,6 +1821,7 @@ All highlight groups are defined with `default = true`, so they can be overridde
 | `PiDiffWinbarCurrent` | `CURRENT:` label on the left pane winbar |
 | `PiDiffWinbarProposed` | `PROPOSED:` label on the right pane winbar |
 | `PiDiffWinbarHint` | Key hint text (`[<Leader>da=accept ...]`) on the winbar |
+| `PiDiffReviewNote` | Sign and virtual text for line-level diff review notes |
 
 ### Statusline
 

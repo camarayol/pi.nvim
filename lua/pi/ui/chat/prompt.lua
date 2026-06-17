@@ -14,6 +14,7 @@ Prompt.__index = Prompt
 
 local Ft = require("pi.filetypes")
 local Config = require("pi.config")
+local Keys = require("pi.keys")
 local Decorators = require("pi.ui.chat.decorators")
 local StatusLine = require("pi.ui.chat.statusline")
 
@@ -72,11 +73,7 @@ function Prompt.new(tab, attachments)
     vim.bo[self._buf].completefunc = "v:lua.require'pi.completion.omnifunc'.completefunc"
     Decorators.attach(self._buf)
 
-    -- Arrow keys move by display line so wrapped text is navigable
-    vim.api.nvim_buf_set_keymap(self._buf, "i", "<Up>", "<C-o>g<Up>", { noremap = true, silent = true })
-    vim.api.nvim_buf_set_keymap(self._buf, "i", "<Down>", "<C-o>g<Down>", { noremap = true, silent = true })
-    vim.api.nvim_buf_set_keymap(self._buf, "n", "<Up>", "g<Up>", { noremap = true, silent = true })
-    vim.api.nvim_buf_set_keymap(self._buf, "n", "<Down>", "g<Down>", { noremap = true, silent = true })
+    Keys.bind_wrapped_line_navigation(self._buf)
 
     vim.api.nvim_create_autocmd("BufLeave", {
         buffer = self._buf,

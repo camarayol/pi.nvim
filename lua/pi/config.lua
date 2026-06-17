@@ -45,6 +45,9 @@
 ---@class pi.DiffKeys
 ---@field accept pi.KeySpecs
 ---@field reject pi.KeySpecs
+---@field edit_note pi.KeySpecs
+---@field delete_note pi.KeySpecs
+---@field list_notes pi.KeySpecs
 ---@field expand_context pi.KeySpecs
 ---@field shrink_context pi.KeySpecs
 
@@ -52,7 +55,11 @@
 ---@field base? integer
 ---@field step integer
 
+---@class pi.DiffIcons
+---@field note string|false Icon/sign used for diff review notes. Set false to omit the icon/sign.
+
 ---@class pi.DiffConfig
+---@field icons pi.DiffIcons
 ---@field context pi.DiffContextConfig
 ---@field keys pi.DiffKeys
 
@@ -260,6 +267,9 @@ local defaults = {
         },
     },
     diff = {
+        icons = {
+            note = "󰆈",
+        },
         context = {
             base = nil,
             step = 5,
@@ -267,6 +277,9 @@ local defaults = {
         keys = {
             accept = "<Leader>da",
             reject = "<Leader>dr",
+            edit_note = "<Leader>dn",
+            delete_note = "<Leader>dx",
+            list_notes = "<Leader>dN",
             expand_context = "<Leader>de",
             shrink_context = "<Leader>ds",
         },

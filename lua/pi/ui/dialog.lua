@@ -2,6 +2,7 @@
 
 local M = {}
 
+local Ft = require("pi.filetypes")
 local Keys = require("pi.keys")
 
 local ns = vim.api.nvim_create_namespace("pi-dialog")
@@ -71,6 +72,9 @@ local function open_float(lines, title, opts)
     local buf = vim.api.nvim_create_buf(false, true)
     vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
     vim.bo[buf].buftype = "nofile"
+    vim.bo[buf].filetype = Ft.dialog
+    vim.bo[buf].completefunc = ""
+    vim.bo[buf].omnifunc = ""
     vim.bo[buf].modifiable = opts.modifiable or false
 
     local max_width = opts.min_width or 0
@@ -353,6 +357,8 @@ function M.input(opts, callback)
         local buf_lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
         resolve(table.concat(buf_lines, "\n"))
     end
+
+    Keys.bind_wrapped_line_navigation(buf)
 
     bind_keys(buf, "confirm", submit)
     bind_keys(buf, "cancel", function()

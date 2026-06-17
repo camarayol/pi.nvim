@@ -64,4 +64,13 @@ function M.lhs(key)
     return key --[[@as string]]
 end
 
+--- Bind arrow keys to move by display line, so wrapped text is navigable.
+---@param buf integer Buffer handle
+function M.bind_wrapped_line_navigation(buf)
+    vim.api.nvim_buf_set_keymap(buf, "i", "<Up>", "<C-o>g<Up>", { noremap = true, silent = true })
+    vim.api.nvim_buf_set_keymap(buf, "i", "<Down>", "<C-o>g<Down>", { noremap = true, silent = true })
+    vim.api.nvim_buf_set_keymap(buf, "n", "<Up>", "g<Up>", { noremap = true, silent = true })
+    vim.api.nvim_buf_set_keymap(buf, "n", "<Down>", "g<Down>", { noremap = true, silent = true })
+end
+
 return M

@@ -2,6 +2,7 @@
 
 ## 2026-06-16
 
+- **ADDED:** Add line-level notes to diff review, including note keymaps, configurable note icon, and note-aware review responses.
 - **ADDED:** Add `pi.toggle_history_blocks()` to expand/collapse all expandable history blocks.
 
 ## 2026-06-15
