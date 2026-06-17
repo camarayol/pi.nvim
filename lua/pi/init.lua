@@ -421,7 +421,15 @@ function M.scroll_chat_history_to_bottom()
     end
 end
 
---- Scroll the chat history to the start of the most recent agent response.
+--- Scroll the chat history to the first agent response in the latest user turn.
+function M.scroll_chat_history_to_first_agent_response()
+    local session = require("pi.sessions.manager").get()
+    if session then
+        session.chat:scroll_history_to_first_agent_response()
+    end
+end
+
+--- Scroll the chat history to the last agent response in the latest user turn.
 function M.scroll_chat_history_to_last_agent_response()
     local session = require("pi.sessions.manager").get()
     if session then

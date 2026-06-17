@@ -873,16 +873,17 @@ pi.scroll_chat_history("up", 2)  -- finer-grained scroll, 2 lines at a time
 
 The second argument is the line count; it defaults to `15` when omitted. Bind both a coarse and a fine-grained step if you want — a fast jump for skimming and a slow nudge for reading.
 
-There are also two jump-style helpers:
+There are also jump-style helpers:
 
 ```lua
-pi.scroll_chat_history_to_bottom()                -- jump to the very latest line
-pi.scroll_chat_history_to_last_agent_response()   -- jump to the start of the most recent agent message
+pi.scroll_chat_history_to_bottom()                 -- jump to the very latest line
+pi.scroll_chat_history_to_first_agent_response()   -- jump to the first agent response in the latest user turn
+pi.scroll_chat_history_to_last_agent_response()    -- jump to the last agent response in the latest user turn
 ```
 
-The "last agent response" jump is particularly handy when the agent has just produced a long answer and you want to read it from the top without manually scrolling back.
+The agent-response jumps are particularly handy when the agent produced multiple text blocks for one prompt: use the first jump to start reading that turn, or the last jump to revisit the newest block.
 
-Like the focus functions, all four scroll functions are no-ops when no session is active. See the [Keymaps](#keymaps) example for typical bindings inside the prompt buffer.
+Like the focus functions, all scroll functions are no-ops when no session is active. See the [Keymaps](#keymaps) example for typical bindings inside the prompt buffer.
 
 ### Diff review
 
@@ -1716,6 +1717,7 @@ pi.focus_chat_prompt()
 pi.focus_chat_attachments()
 pi.scroll_chat_history(direction, lines?)          -- direction: "up" | "down"; lines defaults to 15
 pi.scroll_chat_history_to_bottom()
+pi.scroll_chat_history_to_first_agent_response()
 pi.scroll_chat_history_to_last_agent_response()
 
 -- Debug

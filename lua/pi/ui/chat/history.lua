@@ -40,7 +40,8 @@
 ---@field _pending_queue_extmark_id integer?
 ---@field _replaying boolean
 ---@field _agent_text_start_row integer?
----@field _last_agent_response_extmark_id integer?
+---@field _current_turn_first_agent_response_extmark_id integer?
+---@field _current_turn_last_agent_response_extmark_id integer?
 local History = {}
 History.__index = History
 
@@ -439,7 +440,8 @@ function History.new(tab)
     self._pending_queue_extmark_id = nil
     self._replaying = false
     self._agent_text_start_row = nil
-    self._last_agent_response_extmark_id = nil
+    self._current_turn_first_agent_response_extmark_id = nil
+    self._current_turn_last_agent_response_extmark_id = nil
 
     local panel = Config.options.panels.history
     local name = panel.name and panel.name(tab) or ("π-chat | " .. tab)
@@ -521,16 +523,16 @@ function History:scroll_to_bottom()
     self:_scroll_to_bottom()
 end
 
---- Scroll the history window to the start of the most recent agent response.
-function History:scroll_to_last_agent_response()
+---@param extmark_id integer?
+function History:_scroll_to_agent_response(extmark_id)
     if not self._win or not vim.api.nvim_win_is_valid(self._win) then
         return
     end
-    if not self._last_agent_response_extmark_id then
+    if not extmark_id then
         return
     end
 
-    local pos = vim.api.nvim_buf_get_extmark_by_id(self._buf, ns, self._last_agent_response_extmark_id, {})
+    local pos = vim.api.nvim_buf_get_extmark_by_id(self._buf, ns, extmark_id, {})
     if not pos or #pos == 0 then
         return
     end
@@ -539,6 +541,16 @@ function History:scroll_to_last_agent_response()
         vim.api.nvim_win_set_cursor(self._win, { pos[1] + 1, 0 })
         vim.cmd("normal! zt")
     end)
+end
+
+--- Scroll the history window to the first agent response in the current user turn.
+function History:scroll_to_first_agent_response()
+    self:_scroll_to_agent_response(self._current_turn_first_agent_response_extmark_id)
+end
+
+--- Scroll the history window to the last agent response in the current user turn.
+function History:scroll_to_last_agent_response()
+    self:_scroll_to_agent_response(self._current_turn_last_agent_response_extmark_id)
 end
 
 function History:_pick_spinner()
@@ -945,6 +957,8 @@ function History:add_user_message(msg, timestamp, image_count, queue_type)
         if not self._buf or not vim.api.nvim_buf_is_valid(self._buf) then
             return
         end
+        self._current_turn_first_agent_response_extmark_id = nil
+        self._current_turn_last_agent_response_extmark_id = nil
         self:_begin_conversation_content()
         local label = " " .. Config.options.labels.user_message .. " "
         local has_message_text = msg ~= ""
@@ -1024,7 +1038,11 @@ function History:on_agent_start(timestamp)
         local label_line = label .. time_str
         local start = self:_append_lines({ "", label_line, "" })
         local label_row = start + 1
-        self._last_agent_response_extmark_id = vim.api.nvim_buf_set_extmark(self._buf, ns, label_row, 0, {})
+        local response_extmark_id = vim.api.nvim_buf_set_extmark(self._buf, ns, label_row, 0, {})
+        if not self._current_turn_first_agent_response_extmark_id then
+            self._current_turn_first_agent_response_extmark_id = response_extmark_id
+        end
+        self._current_turn_last_agent_response_extmark_id = response_extmark_id
         vim.api.nvim_buf_set_extmark(self._buf, ns, label_row, 0, {
             end_col = #label,
             hl_group = "PiAgentResponseLabel",
@@ -2543,7 +2561,8 @@ function History:clear()
     self._placeholder_mode = nil
     self._agent_text_start_row = nil
     self._agent_text_chunks = nil
-    self._last_agent_response_extmark_id = nil
+    self._current_turn_first_agent_response_extmark_id = nil
+    self._current_turn_last_agent_response_extmark_id = nil
     vim.api.nvim_buf_clear_namespace(self._buf, ns, 0, -1)
     self:_with_modifiable(function()
         vim.api.nvim_buf_set_lines(self._buf, 0, -1, false, { "" })

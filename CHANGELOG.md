@@ -2,7 +2,9 @@
 
 ## 2026-06-17
 
+- **ADDED:** Add `pi.scroll_chat_history_to_first_agent_response()` to jump to the first assistant response in the latest user turn.
 - **ADDED:** Render live tool progress updates inside chat history tool blocks.
+- **CHANGED:** Make `pi.scroll_chat_history_to_last_agent_response()` target the last assistant response in the latest user turn.
 - **FIXED:** Give each assistant text message its own chat history response header while suppressing empty tool-only headers.
 - **FIXED:** Prevent tool output containing NUL bytes from crashing collapsed history rendering.
 

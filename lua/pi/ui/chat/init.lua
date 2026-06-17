@@ -964,7 +964,12 @@ function Chat:scroll_history_to_bottom()
     self._history:scroll_to_bottom()
 end
 
---- Scroll the history window to the start of the most recent agent response.
+--- Scroll the history window to the first agent response in the latest user turn.
+function Chat:scroll_history_to_first_agent_response()
+    self._history:scroll_to_first_agent_response()
+end
+
+--- Scroll the history window to the last agent response in the latest user turn.
 function Chat:scroll_history_to_last_agent_response()
     self._history:scroll_to_last_agent_response()
 end
