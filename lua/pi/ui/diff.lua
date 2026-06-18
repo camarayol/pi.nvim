@@ -387,6 +387,17 @@ function M.open(payload, callback, opts)
         vim.bo[after_buf].filetype = ft
     end
 
+    local is_markdown = ft == "markdown"
+
+    local function apply_wrap_options()
+        for _, w in ipairs({ left_win, right_win }) do
+            if vim.api.nvim_win_is_valid(w) then
+                vim.wo[w].wrap = is_markdown or vim.go.wrap
+                vim.wo[w].linebreak = is_markdown or vim.go.linebreak
+            end
+        end
+    end
+
     -- Reset window options that may be inherited from the chat window.
     for _, w in ipairs({ left_win, right_win }) do
         vim.wo[w].number = true
@@ -394,8 +405,8 @@ function M.open(payload, callback, opts)
         vim.wo[w].signcolumn = vim.go.signcolumn
         vim.wo[w].conceallevel = 0
         vim.wo[w].concealcursor = ""
-        vim.wo[w].wrap = vim.go.wrap
-        vim.wo[w].linebreak = vim.go.linebreak
+        vim.wo[w].wrap = is_markdown or vim.go.wrap
+        vim.wo[w].linebreak = is_markdown or vim.go.linebreak
         vim.wo[w].list = vim.go.list
         vim.wo[w].cursorline = vim.go.cursorline
         vim.wo[w].winfixbuf = false
@@ -418,6 +429,7 @@ function M.open(payload, callback, opts)
     vim.cmd("diffthis")
     vim.api.nvim_set_current_win(right_win)
     vim.cmd("diffthis")
+    apply_wrap_options()
 
     -- Post-render fixup: re-run diffthis on the left pane after
     -- Neovim has rendered at least once, then jump to the first
@@ -435,6 +447,7 @@ function M.open(payload, callback, opts)
             pcall(vim.cmd, "normal! gg]c")
             vim.cmd("syncbind")
         end
+        apply_wrap_options()
     end, 200)
 
     local diff_keys = Config.options.diff.keys

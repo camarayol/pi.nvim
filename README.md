@@ -902,6 +902,8 @@ Once the diff is open:
 
 All keys are configurable under `diff.keys` using the [Key specs](#key-specs) format, so you can bind multiple keys, pin modes, or replace them entirely. The winbar of the proposed pane always shows the currently-bound keys for all review actions so you don't have to remember them.
 
+Markdown diffs enable wrapping and linebreak in the review panes for readability. Other filetypes keep your global `wrap` and `linebreak` defaults.
+
 #### You need a permission extension
 
 Here's the part to understand before the rest of this section makes sense: **pi itself has no built-in permission system**. The agent dispatches tools whenever it decides to, and by default nothing stands between it and your files. pi.nvim's diff review _only_ triggers when an extension intercepts `edit`/`write` tool calls and routes them through a specially-formatted `ctx.ui.select` request.

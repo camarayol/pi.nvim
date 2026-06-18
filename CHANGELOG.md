@@ -2,6 +2,7 @@
 
 ## 2026-06-18
 
+- **CHANGED:** Wrap markdown diff review panes for readability while preserving global wrapping defaults for other filetypes.
 - **FIXED:** Keep the chat spinner visible when an automatic retry resumes agent work.
 
 ## 2026-06-17
