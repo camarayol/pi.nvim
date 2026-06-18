@@ -1,5 +1,9 @@
 # Changelog
 
+## 2026-06-18
+
+- **FIXED:** Keep the chat spinner visible when an automatic retry resumes agent work.
+
 ## 2026-06-17
 
 - **ADDED:** Add `pi.scroll_chat_history_to_first_agent_response()` to jump to the first assistant response in the latest user turn.

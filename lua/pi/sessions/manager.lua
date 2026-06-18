@@ -83,11 +83,12 @@ local rebuild_after_compaction
 local finish_compaction_rebuild
 
 ---@param chat pi.Chat
-local function restore_status_after_compaction(chat)
-    -- Compaction can fire after agent_end (between turns).
+local function restore_active_agent_status(chat)
+    -- Compaction/retry cleanup can fire after agent_end (between turns).
     -- Only restore the spinner if an agent loop is still active.
-    if chat:active_verb() then
-        chat:set_status({ type = "agent", text = chat:active_verb() .. "…" })
+    local active_verb = chat:active_verb()
+    if active_verb then
+        chat:set_status({ type = "agent", text = active_verb .. "…" })
     else
         chat:set_status(nil)
     end
@@ -226,26 +227,26 @@ local function handle_event(session, msg)
     elseif t == "compaction_end" or t == "auto_compaction_end" then
         if msg.aborted then
             chat:set_compacting(false)
-            restore_status_after_compaction(chat)
+            restore_active_agent_status(chat)
             chat:on_error("Compaction cancelled", { pad_top = true, pad_bottom = true })
             chat:flush_compaction_queue(msg.willRetry == true)
         elseif type(msg.errorMessage) == "string" and msg.errorMessage ~= "" then
             chat:set_compacting(false)
-            restore_status_after_compaction(chat)
+            restore_active_agent_status(chat)
             chat:on_error(msg.errorMessage, { pad_top = true, pad_bottom = true })
             chat:flush_compaction_queue(msg.willRetry == true)
         elseif type(msg.result) == "table" and rebuild_after_compaction then
             rebuild_after_compaction(session, msg.result, msg.willRetry == true)
         else
             chat:set_compacting(false)
-            restore_status_after_compaction(chat)
+            restore_active_agent_status(chat)
             chat:flush_compaction_queue(msg.willRetry == true)
         end
     elseif t == "auto_retry_start" then
         chat:set_status({ type = "agent", text = "Retrying…" })
     elseif t == "auto_retry_end" then
-        chat:set_status(nil)
         if msg.success == false then
+            chat:set_status(nil)
             chat:on_error(
                 "Retry failed after "
                     .. tostring(msg.attempt or 0)
@@ -253,6 +254,8 @@ local function handle_event(session, msg)
                     .. (msg.finalError or "Unknown error"),
                 { pad_top = true, pad_bottom = true }
             )
+        else
+            restore_active_agent_status(chat)
         end
     elseif t == "extension_ui_request" then
         vim.schedule(function()
@@ -331,7 +334,7 @@ finish_compaction_rebuild = function(session, flush_queue, will_retry)
     session._compaction_event_queue = {}
     session._compaction_rebuilding = false
     session.chat:set_compacting(false)
-    restore_status_after_compaction(session.chat)
+    restore_active_agent_status(session.chat)
     if flush_queue ~= false then
         session.chat:flush_compaction_queue(will_retry == true)
     end
