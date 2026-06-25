@@ -614,7 +614,7 @@ Arguments, if the command takes any, follow on the same line:
 /some-command arg1 arg2
 ```
 
-Only the first line is recognized as a command — everything else in the same message is treated as plain prompt text. This is a [pi backend convention](https://github.com/badlogic/pi-mono/blob/main/packages/coding-agent/docs/rpc.md#get_commands), not a pi.nvim restriction. If you want a command and a regular prompt to take effect together, send them as two separate messages.
+Only the first line is recognized as a command — everything else in the same message is treated as plain prompt text. This is a [pi backend convention](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/rpc.md#get_commands), not a pi.nvim restriction. If you want a command and a regular prompt to take effect together, send them as two separate messages.
 
 That said, this only applies to the explicit `/command` invocation path. Skills in particular are surfaced to the model as part of the system context: per the [Agent Skills spec](https://agentskills.io/specification), each skill's `name` and `description` are loaded at startup for _all_ available skills ("progressive disclosure"), and the full `SKILL.md` body is only loaded once the model decides to activate that skill. As a result, most models will pick up the right skill even when you _mention_ it inline ("please use the `commit` skill to write the message"), without you having to invoke `/skill:commit` explicitly. How reliably this works depends on the model and on how much other context it's juggling, so for anything load-bearing it's still safer to invoke the command explicitly on the first line.
 
@@ -928,7 +928,7 @@ If you'd rather roll your own, or just want to understand the protocol, here's a
  * Intercepts every `edit` and `write` tool call and routes it through
  * pi.nvim's diff review UI via ctx.ui.select.
  */
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent"
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent"
 
 // Track which tool calls the user approved so we can flip the
 // blocked-isError flag back in a message_end handler.
@@ -1040,7 +1040,7 @@ export default function (pi: ExtensionAPI) {
 }
 ```
 
-Drop that file into your pi extensions directory (usually `~/.pi/agent/extensions/<name>/index.ts`) and pi will load it on the next session. See the [pi extensions docs](https://github.com/badlogic/pi-mono/blob/main/packages/coding-agent/docs/extensions.md) for how extensions are discovered and registered.
+Drop that file into your pi extensions directory (usually `~/.pi/agent/extensions/<name>/index.ts`) and pi will load it on the next session. See the [pi extensions docs](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/extensions.md) for how extensions are discovered and registered.
 
 </details>
 
@@ -1470,7 +1470,7 @@ After successful compaction, pi.nvim renders a collapsed summary block in chat h
 
 pi extensions are small TypeScript (or Node-compatible) modules that the backend loads at session start. They can intercept tool calls, register slash commands, expose keybindings, surface UI to the user, and inject arbitrary content into the chat. The permission extension in [Diff review](#diff-review) is one example; the `rules:load` / progressive-disclosure hooks in [agentic-af](https://github.com/alex35mil/agentic-af) are others.
 
-pi.nvim is extension-aware. When pi runs under `--mode rpc`, extensions can address the client (pi.nvim) via the [extension UI protocol](https://github.com/badlogic/pi-mono/blob/main/packages/coding-agent/docs/rpc.md#extension-ui-protocol), and pi.nvim routes each method to the right surface in your editor:
+pi.nvim is extension-aware. When pi runs under `--mode rpc`, extensions can address the client (pi.nvim) via the [extension UI protocol](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/rpc.md#extension-ui-protocol), and pi.nvim routes each method to the right surface in your editor:
 
 | Extension UI method | Where pi.nvim surfaces it |
 | --- | --- |

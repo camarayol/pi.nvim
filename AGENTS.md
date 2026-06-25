@@ -1,6 +1,6 @@
 # pi.nvim — Agent Guidelines
 
-Neovim plugin (Lua) — a frontend for the [pi coding agent](https://github.com/badlogic/pi-mono). Provides a chat UI, diff review, session management, and extension handling inside Neovim.
+Neovim plugin (Lua) — a frontend for the [pi coding agent](https://github.com/earendil-works/pi). Provides a chat UI, diff review, session management, and extension handling inside Neovim.
 
 ## Working Principles
 
@@ -81,7 +81,7 @@ Each Neovim tabpage gets at most one session (`sessions[tab]`). Session owns an 
 
 Before implementing a new feature, always consult the pi TUI interactive mode source first. The TUI is the reference frontend. Study how it handles the same feature (event flow, state tracking, edge cases) and mirror the approach, adapting for Neovim's buffer/extmark model.
 
-Key source files (under `$(npm root -g)/@mariozechner/pi-coding-agent/`):
+Key source files (under `$(npm root -g)/@earendil-works/pi-coding-agent/`):
 - `dist/modes/interactive/interactive-mode.js` — TUI frontend
 - `dist/core/agent-session.js` / `agent-session.d.ts` — session layer shared by all frontends
 - `dist/modes/rpc/rpc-types.d.ts` — RPC protocol types

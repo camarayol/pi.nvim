@@ -1,4 +1,4 @@
---- https://github.com/badlogic/pi-mono/blob/main/packages/coding-agent/src/modes/rpc/rpc-types.ts
+--- https://github.com/earendil-works/pi/blob/main/packages/coding-agent/src/modes/rpc/rpc-types.ts
 ---@alias pi.RpcEventType
 ---| "agent_start"
 ---| "agent_end"
@@ -22,7 +22,7 @@
 ---| "_process_exit"
 ---| "_stderr"
 
---- https://github.com/badlogic/pi-mono/blob/main/packages/ai/src/types.ts
+--- https://github.com/earendil-works/pi/blob/main/packages/ai/src/types.ts
 ---@alias pi.AssistantMessageEventType
 ---| "start"
 ---| "text_start"
@@ -37,7 +37,7 @@
 ---| "done"
 ---| "error"
 
---- https://github.com/badlogic/pi-mono/blob/main/packages/coding-agent/src/modes/rpc/rpc-types.ts
+--- https://github.com/earendil-works/pi/blob/main/packages/coding-agent/src/modes/rpc/rpc-types.ts
 ---@alias pi.RpcCommandType
 ---| "prompt"
 ---| "steer"
@@ -72,7 +72,7 @@
 ---@field cancelled? boolean
 ---@field [string] any
 
---- https://github.com/badlogic/pi-mono/blob/main/packages/coding-agent/docs/rpc.md
+--- https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/rpc.md
 ---@class pi.RpcEvent
 ---@field type pi.RpcEventType
 ---@field assistantMessageEvent? { type: pi.AssistantMessageEventType, delta?: string, toolCall?: pi.ToolCall }
