@@ -69,11 +69,15 @@ end
 --- Events we've reviewed and deliberately choose not to handle.
 --- turn_start/turn_end: TUI doesn't handle them; lifecycle is fully
 --- covered by message_start / message_end / agent_end.
+--- thinking_level_changed/session_info_changed: pi.nvim refreshes state
+--- through command callbacks; these are redundant notifications.
 ---@type table<string, true>
 local ignored_events = {
     turn_start = true,
     turn_end = true,
     queue_update = true,
+    thinking_level_changed = true,
+    session_info_changed = true,
 }
 
 ---@type fun(session: pi.Session, result: table, will_retry: boolean)?

@@ -1,9 +1,10 @@
 # Changelog
 
-## 2026-06-25
+## 2026-07-03
 
 - **ADDED:** Add RPC adapter hooks for user-land command/event mapping of non-upstream-compatible backends.
 - **FIXED:** Reject failed multi-edit diff reviews instead of opening an empty diff.
+- **FIXED:** Suppress debug warnings for known redundant session state events.
 
 ## 2026-06-21
 
