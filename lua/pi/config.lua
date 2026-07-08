@@ -193,7 +193,7 @@
 ---@field spinner pi.SpinnerPreset|string[]|{ refresh_rate?: integer, frames: string[] } preset name or custom
 ---@field show_thinking boolean
 ---@field expand_startup_details boolean Default expand/collapse state for the startup block (skills, extensions, startup announcements). Always rendered; Tab on the block or API call toggles.
----@field timestamp_format string Format string passed to os.date for chat message timestamps.
+---@field timestamp_format string Format string passed to os.date for chat message timestamps. Defaults to a non-padded day format using the platform-specific os.date flag.
 ---@field panels pi.Panels
 ---@field labels pi.Labels
 ---@field layout pi.LayoutConfig
@@ -208,6 +208,8 @@
 ---@class pi.ConfigModule
 ---@field options pi.Options
 local M = {}
+
+local Os = require("pi.os")
 
 math.randomseed(os.time())
 
@@ -227,7 +229,7 @@ local defaults = {
     spinner = "robot",
     show_thinking = false,
     expand_startup_details = true,
-    timestamp_format = " %b %-d %Y, %H:%M",
+    timestamp_format = Os.is_windows() and "%b %#d %Y, %H:%M" or "%b %-d %Y, %H:%M",
     panels = {
         history = { title = "π" },
         prompt = { title = "󰫽󰫿󰫼󰫺󰫽󰬁" },

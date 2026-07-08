@@ -1,7 +1,7 @@
 # Changelog
 
 ## 2026-07-04
-- **FIXED:** Make chat timestamp format configurable with `timestamp_format` option, replacing hardcoded `os.date` call with GNU extension `%-d` that fails on Windows.
+- **FIXED:** Make chat timestamp format configurable with `timestamp_format` option and use a platform-specific default to avoid the GNU `%-d` flag on Windows.
 - **FIXED:** Use cross-platform path joining for session directories and file globbing (Windows compatibility).
 
 ## 2026-07-03

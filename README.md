@@ -223,7 +223,7 @@ require("pi").setup({
     -- (skills, extensions, startup announcements).
     expand_startup_details = true,
     -- Format string passed to os.date for chat message timestamps.
-    timestamp_format = " %b %-d %Y, %H:%M",
+    timestamp_format = Os.is_windows() and "%b %#d %Y, %H:%M" or "%b %-d %Y, %H:%M",
 
     -- Chat panels
     panels = {
