@@ -13,6 +13,8 @@
 ---@field _streaming boolean
 ---@field _compacting boolean
 ---@field _assistant_block_open boolean
+---@field _assistant_message_header_rendered boolean
+---@field _assistant_tool_only_header_rendered boolean
 ---@field _assistant_message_timestamp number?
 ---@field _flushed_queue_entries pi.PendingQueueEntry[]
 ---@field _replay_flushed_queue_entries pi.PendingQueueEntry[]
@@ -59,6 +61,8 @@ function Chat.new(tab, mode, agent)
     self._streaming = false
     self._compacting = false
     self._assistant_block_open = false
+    self._assistant_message_header_rendered = false
+    self._assistant_tool_only_header_rendered = false
     self._assistant_message_timestamp = nil
     self._flushed_queue_entries = {}
     self._replay_flushed_queue_entries = {}
@@ -625,6 +629,8 @@ function Chat:on_agent_start(timestamp)
     self._streaming = true
     self._last_turn_stop_reason = nil
     self._assistant_block_open = false
+    self._assistant_message_header_rendered = false
+    self._assistant_tool_only_header_rendered = false
     self._assistant_message_timestamp = timestamp
     local verbs = Config.random_verbs()
     self._active_verb = verbs[1]
@@ -634,10 +640,12 @@ end
 
 function Chat:_ensure_assistant_block_open()
     if self._assistant_block_open then
+        self._assistant_message_header_rendered = true
         return
     end
     self._history:on_agent_start(self._assistant_message_timestamp)
     self._assistant_block_open = true
+    self._assistant_message_header_rendered = true
 end
 
 ---@param delta string
@@ -646,6 +654,7 @@ function Chat:on_text_delta(delta)
         return
     end
     self:_ensure_assistant_block_open()
+    self._assistant_tool_only_header_rendered = false
     self._history:on_text_delta(delta)
 end
 
@@ -690,6 +699,8 @@ end
 function Chat:on_agent_end()
     self._streaming = false
     self._assistant_block_open = false
+    self._assistant_message_header_rendered = false
+    self._assistant_tool_only_header_rendered = false
     self._assistant_message_timestamp = nil
     -- Flush any remaining pending queue entries into the history.
     -- Normally they are moved on message_start, but if the agent ends
@@ -767,6 +778,7 @@ function Chat:on_message_start(msg)
         end
     elseif message.role == "assistant" then
         self._assistant_block_open = false
+        self._assistant_message_header_rendered = false
         self._assistant_message_timestamp = message.timestamp
     end
 end
@@ -815,7 +827,6 @@ function Chat:on_message_end(msg)
         end
     end
     self._assistant_block_open = false
-    self._assistant_message_timestamp = nil
 end
 
 --- Update status line state (model, thinking level) from get_state response.
@@ -889,6 +900,10 @@ end
 ---@param tool_call_id string
 ---@param tool_input? table
 function Chat:on_tool_start(tool_name, tool_call_id, tool_input)
+    if not self._assistant_message_header_rendered and not self._assistant_tool_only_header_rendered then
+        self:_ensure_assistant_block_open()
+        self._assistant_tool_only_header_rendered = true
+    end
     self._history:on_tool_start(tool_name, tool_call_id, tool_input)
 end
 
@@ -941,6 +956,8 @@ function Chat:clear()
     self._streaming = false
     self._compacting = false
     self._assistant_block_open = false
+    self._assistant_message_header_rendered = false
+    self._assistant_tool_only_header_rendered = false
     self._assistant_message_timestamp = nil
     self._flushed_queue_entries = {}
     self._replay_flushed_queue_entries = {}

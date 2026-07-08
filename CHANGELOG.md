@@ -1,5 +1,9 @@
 # Changelog
 
+## 2026-07-08
+
+- **FIXED:** Show the assistant header before tool-only turns so tool calls do not appear under the user message.
+
 ## 2026-07-04
 - **FIXED:** Make chat timestamp format configurable with `timestamp_format` option and use a platform-specific default to avoid the GNU `%-d` flag on Windows.
 - **FIXED:** Use cross-platform path joining for session directories and file globbing (Windows compatibility).
