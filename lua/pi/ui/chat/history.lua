@@ -982,7 +982,8 @@ function History:add_user_message(msg, timestamp, image_count, queue_type)
         elseif queue_type == "follow_up" then
             queue_tag = "  " .. Config.options.labels.follow_up_message
         end
-        local label_line = label .. time_str .. queue_tag
+        local time_sep = " "
+        local label_line = label .. time_sep .. time_str .. queue_tag
         local lines = { "", label_line }
         vim.list_extend(lines, msg_lines)
         if image_count and image_count > 0 then
@@ -996,8 +997,9 @@ function History:add_user_message(msg, timestamp, image_count, queue_type)
             end_col = #label,
             hl_group = "PiUserMessageLabel",
         })
-        local time_end = #label + #time_str
-        vim.api.nvim_buf_set_extmark(self._buf, ns, label_row, #label, {
+        local time_start = #label + #time_sep
+        local time_end = time_start + #time_str
+        vim.api.nvim_buf_set_extmark(self._buf, ns, label_row, time_start, {
             end_col = time_end,
             hl_group = "PiMessageDateTime",
         })
@@ -1035,7 +1037,8 @@ function History:on_agent_start(timestamp)
         local label = " " .. Config.options.labels.agent_response .. " "
         local time = timestamp or (os.time() * 1000)
         local time_str = format_time(time)
-        local label_line = label .. time_str
+        local time_sep = " "
+        local label_line = label .. time_sep .. time_str
         local start = self:_append_lines({ "", label_line, "" })
         local label_row = start + 1
         local response_extmark_id = vim.api.nvim_buf_set_extmark(self._buf, ns, label_row, 0, {})
@@ -1047,7 +1050,8 @@ function History:on_agent_start(timestamp)
             end_col = #label,
             hl_group = "PiAgentResponseLabel",
         })
-        vim.api.nvim_buf_set_extmark(self._buf, ns, label_row, #label, {
+        local time_start = #label + #time_sep
+        vim.api.nvim_buf_set_extmark(self._buf, ns, label_row, time_start, {
             end_col = #label_line,
             hl_group = "PiMessageDateTime",
         })
@@ -1171,7 +1175,8 @@ end
 function History:_append_system_error_block(error_message, timestamp, opts)
     local label = " " .. Config.options.labels.system_error .. " "
     local time_str = format_time(timestamp)
-    local label_line = label .. time_str
+    local time_sep = " "
+    local label_line = label .. time_sep .. time_str
     local error_lines = vim.split(error_message, "\n", { plain = true })
 
     local lines = {}
@@ -1194,7 +1199,8 @@ function History:_append_system_error_block(error_message, timestamp, opts)
         hl_group = "PiStartupErrorLabel",
         priority = STARTUP_HL_PRIORITY,
     })
-    vim.api.nvim_buf_set_extmark(self._buf, ns, label_row, #label, {
+    local time_start = #label + #time_sep
+    vim.api.nvim_buf_set_extmark(self._buf, ns, label_row, time_start, {
         end_col = #label_line,
         hl_group = "PiMessageDateTime",
         priority = STARTUP_HL_PRIORITY,
@@ -1354,7 +1360,8 @@ function History:_build_startup_error_lines(base_row)
         end
         local label = " " .. Config.options.labels.system_error .. " "
         local time_str = format_time(entry.timestamp)
-        local label_line = label .. time_str
+        local time_sep = " "
+        local label_line = label .. time_sep .. time_str
         lines[#lines + 1] = label_line
         marks[#marks + 1] = {
             row = base_row + #lines - 1,
@@ -1364,7 +1371,7 @@ function History:_build_startup_error_lines(base_row)
         }
         marks[#marks + 1] = {
             row = base_row + #lines - 1,
-            col_start = #label,
+            col_start = #label + #time_sep,
             col_end = #label_line,
             hl = "PiMessageDateTime",
         }
