@@ -387,7 +387,7 @@ local function render_diff(history, old_text, new_text, line_offset, path, inser
     return insert_at
 end
 
---- Truncate a line to max_width, appending "…" if truncated.
+--- Truncate a line to max_width, appending "..." if truncated.
 ---@param line string
 ---@param max_width integer
 ---@return string
@@ -397,18 +397,18 @@ local function truncate_line(line, max_width)
         return line
     end
     -- Binary-ish search for the cut point in bytes
-    local cut = max_width - 1 -- leave room for …
+    local cut = max_width - 1 -- leave room for ...
     while cut > 0 and vim.fn.strdisplaywidth(line:sub(1, cut)) > cut do
         cut = cut - 1
     end
-    return line:sub(1, cut) .. "…"
+    return line:sub(1, cut) .. "..."
 end
 
 --- Build a structured collapsed view for a tool block.
 --- Input: ≤ input_visible as-is, otherwise first input_visible line(s) + "+N lines".
 --- Separator + output hidden entirely when output_visible = 0.
---- Output: ≤ output_visible as-is, otherwise "…N lines" + last output_visible line(s).
---- Lines longer than max_width are truncated with "…".
+--- Output: ≤ output_visible as-is, otherwise "...N lines" + last output_visible line(s).
+--- Lines longer than max_width are truncated with "...".
 ---@param input_lines string[]
 ---@param output_lines string[] actual output (no separator/code fences)
 ---@param has_output boolean
@@ -450,7 +450,7 @@ function M.build_collapsed_view(input_lines, output_lines, has_output, input_vis
                 add(l, "output")
             end
         elseif #output_lines > 0 then
-            lines[#lines + 1] = "…" .. (#output_lines - output_visible) .. " lines"
+            lines[#lines + 1] = "..." .. (#output_lines - output_visible) .. " lines"
             specs[#specs + 1] = "summary"
             for i = #output_lines - output_visible + 1, #output_lines do
                 add(output_lines[i], "output")

@@ -268,7 +268,7 @@ end
 local function note_preview(note)
     local first = vim.split(note, "\n", { plain = true })[1] or ""
     if vim.fn.strdisplaywidth(first) > 80 then
-        return vim.fn.strcharpart(first, 0, 77) .. "…"
+        return vim.fn.strcharpart(first, 0, 77) .. "..."
     end
     return first
 end

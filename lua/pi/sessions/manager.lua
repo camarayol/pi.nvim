@@ -92,7 +92,7 @@ local function restore_active_agent_status(chat)
     -- Only restore the spinner if an agent loop is still active.
     local active_verb = chat:active_verb()
     if active_verb then
-        chat:set_status({ type = "agent", text = active_verb .. "…" })
+        chat:set_status({ type = "agent", text = active_verb .. "..." })
     else
         chat:set_status(nil)
     end
@@ -247,7 +247,7 @@ local function handle_event(session, msg)
             chat:flush_compaction_queue(msg.willRetry == true)
         end
     elseif t == "auto_retry_start" then
-        chat:set_status({ type = "agent", text = "Retrying…" })
+        chat:set_status({ type = "agent", text = "Retrying..." })
     elseif t == "auto_retry_end" then
         if msg.success == false then
             chat:set_status(nil)

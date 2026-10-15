@@ -591,7 +591,7 @@ function History:_update_status_extmark()
                 preview = format_attachment_info(entry.image_count)
             end
             if #preview > 80 then
-                preview = preview:sub(1, 77) .. "…"
+                preview = preview:sub(1, 77) .. "..."
             end
             virt[#virt + 1] = {
                 { "  " .. label, "PiPendingQueueLabel" },
@@ -790,7 +790,7 @@ function History:set_status(status)
                 local s = spinner.compaction
                 self._spinner_frames = s.frames
                 self._spinner_rate = s.refresh_rate
-                text = "Compacting…"
+                text = "Compacting..."
             else
                 self:_pick_spinner()
                 text = status.text
@@ -960,7 +960,7 @@ function History:add_user_message(msg, timestamp, image_count, queue_type)
         self._current_turn_first_agent_response_extmark_id = nil
         self._current_turn_last_agent_response_extmark_id = nil
         self:_begin_conversation_content()
-        local label = " " .. Config.options.labels.user_message .. " "
+        local label = Config.options.labels.user_message
         local has_message_text = msg ~= ""
         local msg_lines = has_message_text and vim.split(msg, "\n", { plain = true }) or {}
         -- Treesitter highlights fenced code blocks — an unclosed fence bleeds
@@ -974,17 +974,16 @@ function History:add_user_message(msg, timestamp, image_count, queue_type)
         if fences % 2 == 1 then
             msg_lines[#msg_lines + 1] = "```"
         end
-        local time = timestamp or (os.time() * 1000)
-        local time_str = format_time(time)
+        local time_str = format_time(timestamp or (os.time() * 1000))
         local queue_tag = ""
         if queue_type == "steer" then
             queue_tag = "  " .. Config.options.labels.steer_message
         elseif queue_type == "follow_up" then
             queue_tag = "  " .. Config.options.labels.follow_up_message
         end
-        local time_sep = " "
-        local label_line = label .. time_sep .. time_str .. queue_tag
-        local lines = { "", label_line }
+        local label_line = label .. queue_tag
+        local lead = self:_block_lead()
+        local lines = vim.list_extend(vim.deepcopy(lead), { label_line, "" })
         vim.list_extend(lines, msg_lines)
         if image_count and image_count > 0 then
             local info = format_attachment_info(image_count)
@@ -992,20 +991,16 @@ function History:add_user_message(msg, timestamp, image_count, queue_type)
             lines[#lines + 1] = info
         end
         local start = self:_append_lines(lines)
-        local label_row = start + 1
+        local label_row = start + #lead
+        -- The label row is a full-width band; the time sits at its right edge.
         vim.api.nvim_buf_set_extmark(self._buf, ns, label_row, 0, {
-            end_col = #label,
-            hl_group = "PiUserMessageLabel",
-        })
-        local time_start = #label + #time_sep
-        local time_end = time_start + #time_str
-        vim.api.nvim_buf_set_extmark(self._buf, ns, label_row, time_start, {
-            end_col = time_end,
-            hl_group = "PiMessageDateTime",
+            line_hl_group = "PiUserMessageLabel",
+            virt_text = { { time_str, "PiUserMessageLabel" } },
+            virt_text_pos = "right_align",
         })
         if queue_tag ~= "" then
-            vim.api.nvim_buf_set_extmark(self._buf, ns, label_row, time_end, {
-                end_col = time_end + #queue_tag,
+            vim.api.nvim_buf_set_extmark(self._buf, ns, label_row, #label, {
+                end_col = #label_line,
                 hl_group = "PiMessageQueueTag",
             })
         end
@@ -1021,6 +1016,19 @@ function History:add_user_message(msg, timestamp, image_count, queue_type)
     end)
 end
 
+--- Blank rows to put before a new block. A tool block that ends the buffer leaves
+--- its own blank row below it, so no second one is added; an empty buffer keeps
+--- its leading row.
+---@return string[]
+function History:_block_lead()
+    local last = vim.api.nvim_buf_line_count(self._buf) - 1
+    if last == 0 then
+        return { "" }
+    end
+    local cur = vim.api.nvim_buf_get_lines(self._buf, last, last + 1, false)[1] or ""
+    return cur == "" and {} or { "" }
+end
+
 ---@param timestamp? number
 function History:on_agent_start(timestamp)
     vim.schedule(function()
@@ -1034,28 +1042,26 @@ function History:on_agent_start(timestamp)
         self._needs_separator = false
         self._last_was_inline = false
         self:_pick_spinner()
-        local label = " " .. Config.options.labels.agent_response .. " "
-        local time = timestamp or (os.time() * 1000)
-        local time_str = format_time(time)
-        local time_sep = " "
-        local label_line = label .. time_sep .. time_str
-        local start = self:_append_lines({ "", label_line, "" })
-        local label_row = start + 1
+        local time_str = format_time(timestamp or (os.time() * 1000))
+        -- No trailing blank row: the separator is added lazily by the first
+        -- text delta, tool call, or error so the label is always followed by
+        -- exactly one blank row.
+        local lead = self:_block_lead()
+        local start = self:_append_lines(vim.list_extend(vim.deepcopy(lead), { Config.options.labels.agent_response }))
+        local label_row = start + #lead
         local response_extmark_id = vim.api.nvim_buf_set_extmark(self._buf, ns, label_row, 0, {})
         if not self._current_turn_first_agent_response_extmark_id then
             self._current_turn_first_agent_response_extmark_id = response_extmark_id
         end
         self._current_turn_last_agent_response_extmark_id = response_extmark_id
         vim.api.nvim_buf_set_extmark(self._buf, ns, label_row, 0, {
-            end_col = #label,
-            hl_group = "PiAgentResponseLabel",
+            line_hl_group = "PiAgentResponseLabel",
+            virt_text = { { time_str, "PiAgentResponseLabel" } },
+            virt_text_pos = "right_align",
         })
-        local time_start = #label + #time_sep
-        vim.api.nvim_buf_set_extmark(self._buf, ns, label_row, time_start, {
-            end_col = #label_line,
-            hl_group = "PiMessageDateTime",
-        })
-        self._agent_text_start_row = start + 2
+        -- _agent_text_start_row is resolved lazily, together with the separator
+        -- row (see on_text_delta): the label itself has no trailing blank row.
+        self._agent_text_start_row = nil
     end)
 end
 
@@ -1066,15 +1072,21 @@ function History:on_text_delta(delta)
             return
         end
         if self._first_delta then
-            self._first_delta = false
             delta = delta:gsub("^\n+", "")
+            -- Keep waiting for the first non-blank delta: consuming the flag here
+            -- would leave later text appended straight onto the response label.
             if delta == "" then
                 return
             end
+            self._first_delta = false
+            -- The response label is followed by exactly one blank row.
+            self._needs_separator = true
         end
         if self._needs_separator then
             self._needs_separator = false
-            self:_append_lines({ "", "" })
+            local sep_start = self:_append_lines({ "", "" })
+            -- Tables in the agent response are scanned from the first text row.
+            self._agent_text_start_row = sep_start + 1
         end
         self._last_was_inline = false
         if self._agent_text_chunks then
@@ -1123,8 +1135,9 @@ function History:on_agent_end(done_verb, opts)
         else
             text = verb .. " in <1s"
         end
-        local start = self:_append_lines({ "", text })
-        vim.api.nvim_buf_set_extmark(self._buf, ns, start + 1, 0, {
+        local lead = self:_block_lead()
+        local start = self:_append_lines(vim.list_extend(vim.deepcopy(lead), { text }))
+        vim.api.nvim_buf_set_extmark(self._buf, ns, start + #lead, 0, {
             end_col = #text,
             hl_group = "PiBusyTime",
         })
@@ -1252,41 +1265,18 @@ end
 --- Build the welcome header used by both compact and expanded startup views.
 ---@return string[], pi.HighlightMark[]
 function History:_build_startup_header()
-    local lines = {} ---@type string[]
+    local welcome = "  Welcome to pi.nvim! Use @file to mention files or /command for shortcuts."
+    local lines = { welcome, "" } ---@type string[]
     local marks = {} ---@type pi.HighlightMark[]
-
-    -- Welcome lines (always shown)
-    local label = " " .. Config.options.labels.agent_response .. " "
-    local body = "  Hi! Ask me anything or describe what you'd like to build."
-    local hint_prefix = "     Use "
-    local mention = "@file"
-    local hint_middle = " to mention files or "
-    local command = "/command"
-    local hint_suffix = " for shortcuts."
-
-    lines[#lines + 1] = ""
-    lines[#lines + 1] = label .. body
-    local welcome_row = #lines - 1
-    marks[#marks + 1] = { row = welcome_row, col_start = 0, col_end = #label, hl = "PiAgentResponseLabel" }
-    marks[#marks + 1] = { row = welcome_row, col_start = #label, col_end = #lines[#lines], hl = "PiWelcome" }
-
-    lines[#lines + 1] = ""
-    local hint_line = hint_prefix .. mention .. hint_middle .. command .. hint_suffix
-    lines[#lines + 1] = hint_line
-    local hint_row = #lines - 1
-    local col = 0
-    marks[#marks + 1] = { row = hint_row, col_start = col, col_end = col + #hint_prefix, hl = "PiWelcomeHint" }
-    col = col + #hint_prefix
-    marks[#marks + 1] = { row = hint_row, col_start = col, col_end = col + #mention, hl = "PiMention" }
-    col = col + #mention
-    marks[#marks + 1] = { row = hint_row, col_start = col, col_end = col + #hint_middle, hl = "PiWelcomeHint" }
-    col = col + #hint_middle
-    marks[#marks + 1] = { row = hint_row, col_start = col, col_end = col + #command, hl = "PiCommand" }
-    col = col + #command
-    marks[#marks + 1] = { row = hint_row, col_start = col, col_end = col + #hint_suffix, hl = "PiWelcomeHint" }
-
-    lines[#lines + 1] = ""
-
+    marks[#marks + 1] = { row = 0, col_start = 0, col_end = #welcome, hl = "PiWelcomeHint" }
+    local fs, fe = welcome:find("@file", 1, true)
+    if fs and fe then
+        marks[#marks + 1] = { row = 0, col_start = fs - 1, col_end = fe, hl = "PiMention" }
+    end
+    local cs, ce = welcome:find("/command", 1, true)
+    if cs and ce then
+        marks[#marks + 1] = { row = 0, col_start = cs - 1, col_end = ce, hl = "PiCommand" }
+    end
     return lines, marks
 end
 
@@ -1469,7 +1459,7 @@ function History:_render_startup_block(scroll_to_bottom)
         lines, marks = self:_build_startup_header()
         if not self._startup_loaded then
             -- Still waiting for startup data — show loading hint.
-            local loading = "     Loading resources…"
+            local loading = "     Loading resources..."
             lines[#lines + 1] = loading
             marks[#marks + 1] = { row = #lines - 1, col_start = 0, col_end = #loading, hl = "PiStartupHint" }
         end
@@ -1663,7 +1653,7 @@ function History:on_system_error(error_message, opts)
     end)
 end
 
---- Render the welcome header with "Loading resources…" hint.
+--- Render the welcome header with "Loading resources..." hint.
 --- Used on initial chat show to provide feedback while startup data is being fetched.
 function History:show_loading_startup()
     self:_render_startup_block(false)
@@ -2320,7 +2310,7 @@ function History:on_thinking_start()
             buf_lines = 0,
         }
         if self._show_thinking then
-            local header_text = label .. " Thinking…"
+            local header_text = label .. " Thinking..."
             local block = { "", header_text, "", "" }
             local pos = vim.api.nvim_buf_get_extmark_by_id(self._buf, ns, anchor, {})
             local row = pos[1]

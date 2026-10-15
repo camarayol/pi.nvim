@@ -208,7 +208,7 @@ function Chat:_set_keymaps()
 end
 
 ---@class pi.ChatShowOpts
----@field loading? boolean Show "Loading session…" placeholder
+---@field loading? boolean Show "Loading session..." placeholder
 
 ---@param opts? pi.ChatShowOpts
 function Chat:show(opts)
@@ -230,11 +230,11 @@ end
 
 --- Show a loading placeholder on the empty history buffer.
 function Chat:show_loading()
-    local icon = " " .. Config.options.labels.agent_response .. " "
+    local icon = Config.options.labels.agent_response
     self._history:show_loading_placeholder({
         {
             { icon, "PiAgentResponseLabel" },
-            { "  Loading session…", "PiWelcomeHint" },
+            { "  Loading session...", "PiWelcomeHint" },
         },
     })
 end
@@ -635,7 +635,7 @@ function Chat:on_agent_start(timestamp)
     local verbs = Config.random_verbs()
     self._active_verb = verbs[1]
     self._done_verb = verbs[2]
-    self:set_status({ type = "agent", text = verbs[1] .. "…" })
+    self:set_status({ type = "agent", text = verbs[1] .. "..." })
 end
 
 function Chat:_ensure_assistant_block_open()

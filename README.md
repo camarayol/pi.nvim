@@ -1149,7 +1149,7 @@ For `write`, replace `edits` with `"content": "<full file text>"`.
 
 **Response** (the value returned from `await ctx.ui.select(...)`):
 
-| Value | Meaning | Extension should… |
+| Value | Meaning | Extension should... |
 | --- | --- | --- |
 | `"Accept"` | Only returned by the pi TUI, not by pi.nvim. | Return `undefined` and let the tool run normally. |
 | `'{"result":"Accepted","notes":[...]}'` | User accepted. pi.nvim already wrote the file. `notes` is omitted when empty. | Return `{ block: true, reason: "[accepted] ..." }` so pi doesn't double-write. Include notes in `reason` when present. |
@@ -1845,8 +1845,8 @@ All highlight groups are defined with `default = true`, so they can be overridde
 | `PiThinking` | Thinking block body |
 | `PiMention` | Highlighted `@mention` in the prompt and history |
 | `PiCommand` | Highlighted `/command` on the first line of the prompt |
-| `PiWelcome` | Welcome text on an empty chat |
-| `PiWelcomeHint` | Hint text under the welcome |
+| `PiWelcome` | Reserved — the welcome line is rendered as a hint; kept for custom configs |
+| `PiWelcomeHint` | Welcome line on an empty chat |
 | `PiBusy` | "Agent is working" status text |
 | `PiBusyTime` | Elapsed time counter next to the busy status |
 | `PiWarning` | Inline warning lines |
