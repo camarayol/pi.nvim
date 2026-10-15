@@ -2,7 +2,7 @@
 
 local M = {}
 
-M.GLYPHS = { TOP = "╭─ ", MID = "│  ", SEP = "├──── ", BOT = "╰─ " }
+M.GLYPHS = { TOP = "  ", MID = "  ", SEP = "  ", BOT = "  " }
 
 ---@param text string?
 ---@return string
@@ -112,6 +112,23 @@ function M.set_border(history, row, glyph)
     })
 end
 
+--- Truncate a line to max_width, appending "..." if truncated.
+---@param line string
+---@param max_width integer
+---@return string
+function M.truncate_line(line, max_width)
+    line = M.sanitize_text(line)
+    if max_width <= 0 or vim.fn.strdisplaywidth(line) <= max_width then
+        return line
+    end
+    -- Binary-ish search for the cut point in bytes
+    local cut = max_width - 1 -- leave room for ...
+    while cut > 0 and vim.fn.strdisplaywidth(line:sub(1, cut)) > cut do
+        cut = cut - 1
+    end
+    return line:sub(1, cut) .. "..."
+end
+
 ---@param history pi.ChatHistory
 ---@param text string
 ---@param hl_group? string
@@ -119,6 +136,28 @@ end
 ---@return integer? next_insert_at  advanced insertion cursor (nil when appending)
 local function render_body_line(history, text, hl_group, insert_at)
     text = M.sanitize_text(text)
+    -- The first input line of a tool block rides on the block's header row
+    -- (icon + tool name + info); remaining input lines render below it. It is
+    -- truncated to the space left after the header prefix.
+    local pending = history._pending_tool_header
+    if pending and not pending.filled then
+        pending.filled = true
+        local buf = history:buf()
+        local ns_id = history:ns()
+        local cur = vim.api.nvim_buf_get_lines(buf, pending.row, pending.row + 1, false)[1] or ""
+        local appended = "  " .. text
+        history:_with_modifiable(function()
+            vim.api.nvim_buf_set_text(buf, pending.row, #cur, pending.row, #cur, { appended })
+        end)
+        pending.info = text
+        if #text > 0 then
+            pending.info_extmark = vim.api.nvim_buf_set_extmark(buf, ns_id, pending.row, #cur + 2, {
+                end_col = #cur + #appended,
+                hl_group = hl_group or "PiToolCall",
+            })
+        end
+        return insert_at
+    end
     local start
     if insert_at then
         start, insert_at = history:_insert_lines(insert_at, { text })
@@ -387,23 +426,6 @@ local function render_diff(history, old_text, new_text, line_offset, path, inser
     return insert_at
 end
 
---- Truncate a line to max_width, appending "..." if truncated.
----@param line string
----@param max_width integer
----@return string
-local function truncate_line(line, max_width)
-    line = M.sanitize_text(line)
-    if max_width <= 0 or vim.fn.strdisplaywidth(line) <= max_width then
-        return line
-    end
-    -- Binary-ish search for the cut point in bytes
-    local cut = max_width - 1 -- leave room for ...
-    while cut > 0 and vim.fn.strdisplaywidth(line:sub(1, cut)) > cut do
-        cut = cut - 1
-    end
-    return line:sub(1, cut) .. "..."
-end
-
 --- Build a structured collapsed view for a tool block.
 --- Input: ≤ input_visible as-is, otherwise first input_visible line(s) + "+N lines".
 --- Separator + output hidden entirely when output_visible = 0.
@@ -423,7 +445,7 @@ function M.build_collapsed_view(input_lines, output_lines, has_output, input_vis
 
     local function add(line, spec)
         line = M.sanitize_text(line)
-        lines[#lines + 1] = max_width > 0 and truncate_line(line, max_width) or line
+        lines[#lines + 1] = max_width > 0 and M.truncate_line(line, max_width) or line
         specs[#specs + 1] = spec
     end
 
@@ -491,11 +513,11 @@ end
 function M.extract_tool_sections(history, block)
     local buf = history:buf()
     local ns_id = history:ns()
-    local header_row = vim.api.nvim_buf_get_extmark_by_id(buf, ns_id, block.icon_extmark, {})[1]
-    local footer_row = vim.api.nvim_buf_get_extmark_by_id(buf, ns_id, block.end_extmark, {})[1]
+    local header_row, last_row = history:_tool_block_rows(block)
     local has_output = block.output_extmark ~= nil
+    local end_row = last_row + 1 -- exclusive
 
-    local input_end = footer_row
+    local input_end = end_row
     if has_output then
         input_end = vim.api.nvim_buf_get_extmark_by_id(buf, ns_id, block.output_extmark, {})[1]
     end
@@ -506,8 +528,8 @@ function M.extract_tool_sections(history, block)
         local output_row = vim.api.nvim_buf_get_extmark_by_id(buf, ns_id, block.output_extmark, {})[1]
         -- Output section: separator, actual lines...
         local content_start = output_row + 1 -- skip separator
-        if content_start < footer_row then
-            output_lines = vim.api.nvim_buf_get_lines(buf, content_start, footer_row, false)
+        if content_start < end_row then
+            output_lines = vim.api.nvim_buf_get_lines(buf, content_start, end_row, false)
         end
     end
 
@@ -544,27 +566,28 @@ end
 --- Renderers ---
 
 ---@class pi.ToolRenderer
----@field on_start? fun(history: pi.ChatHistory, args: table?)
+---@field prepare? fun(history: pi.ChatHistory, args: table?)  side-effectful setup run when the tool starts
+---@field on_start? fun(history: pi.ChatHistory, args: table?, insert_at: integer?): integer?  deferred input rendering
 ---@field on_end? fun(history: pi.ChatHistory, args: table?, result: table?, is_error: boolean?, insert_at: integer?): integer?
 ---@field input_visible? integer  lines to show when collapsed (default: show all)
 ---@field output_visible? integer lines to show when collapsed (default: show all)
----@field inline? boolean  render as a single line (no header/footer)
+---@field inline? boolean  render as a single line (no multi-line block)
 ---@field inline_text? fun(args: table?): string?  text to show after tool name
----@field inline_status? fun(result: table?, is_error: boolean?): string?  extra text next to status icon
 
 ---@type table<string, pi.ToolRenderer>
 local renderers = {
     bash = {
         input_visible = 1,
-        output_visible = 1,
-        on_start = function(history, args)
+        output_visible = 0,
+        on_start = function(history, args, insert_at)
             if args and (args.command or args.cmd) then
                 local cmd = args.command or args.cmd
                 local lines = vim.split(cmd, "\n", { plain = true })
                 for _, line in ipairs(lines) do
-                    render_body_line(history, line)
+                    insert_at = render_body_line(history, line, nil, insert_at)
                 end
             end
+            return insert_at
         end,
         on_end = function(history, _, result, _, insert_at)
             local text = extract_result_text(result)
@@ -579,20 +602,14 @@ local renderers = {
         inline_text = function(args)
             return args and (args.path or args.file_path) or nil
         end,
-        inline_status = function(result)
-            local text = extract_result_text(result)
-            if text then
-                local n = select(2, text:gsub("\n", "\n")) + 1
-                return "(" .. n .. " lines)"
-            end
-        end,
     },
     edit = {
         output_visible = 0,
-        on_start = function(history, args)
+        on_start = function(history, args, insert_at)
             if args and (args.path or args.file_path) then
-                render_body_line(history, args.path or args.file_path)
+                return render_body_line(history, args.path or args.file_path, nil, insert_at)
             end
+            return insert_at
         end,
         on_end = function(history, args, _, _, insert_at)
             if not args then
@@ -690,36 +707,43 @@ local renderers = {
     },
     write = {
         output_visible = 0,
-        on_start = function(history, args)
-            if not args then
+        -- Snapshot the original file before the tool writes it. Runs at tool
+        -- start (rendering is deferred), and is skipped during replay because
+        -- the file state no longer matches the original session.
+        prepare = function(history, args)
+            if not args or history._replaying then
                 return
             end
             local path = args.path or args.file_path
-            if path then
-                render_body_line(history, path)
-                -- Snapshot original content before the tool writes the file.
-                -- Stash on args so on_end can diff against it.
-                -- Skip during replay — file state no longer matches the original session.
-                if history._replaying then
-                    return
-                end
-                local abs_path = vim.fn.fnamemodify(path, ":p")
-                local original
-                for _, b in ipairs(vim.api.nvim_list_bufs()) do
-                    if vim.api.nvim_buf_is_loaded(b) and vim.api.nvim_buf_get_name(b) == abs_path then
-                        original = table.concat(vim.api.nvim_buf_get_lines(b, 0, -1, false), "\n")
-                        break
-                    end
-                end
-                if not original then
-                    local f = io.open(abs_path, "r")
-                    if f then
-                        original = f:read("*a")
-                        f:close()
-                    end
-                end
-                args._original_content = original or ""
+            if not path then
+                return
             end
+            local abs_path = vim.fn.fnamemodify(path, ":p")
+            local original
+            for _, b in ipairs(vim.api.nvim_list_bufs()) do
+                if vim.api.nvim_buf_is_loaded(b) and vim.api.nvim_buf_get_name(b) == abs_path then
+                    original = table.concat(vim.api.nvim_buf_get_lines(b, 0, -1, false), "\n")
+                    break
+                end
+            end
+            if not original then
+                local f = io.open(abs_path, "r")
+                if f then
+                    original = f:read("*a")
+                    f:close()
+                end
+            end
+            args._original_content = original or ""
+        end,
+        on_start = function(history, args, insert_at)
+            if not args then
+                return insert_at
+            end
+            local path = args.path or args.file_path
+            if path then
+                return render_body_line(history, path, nil, insert_at)
+            end
+            return insert_at
         end,
         on_end = function(history, args, _, _, insert_at)
             if not args or not args.content then
@@ -739,25 +763,24 @@ local renderers = {
 local default_renderer = {
     input_visible = 1,
     output_visible = 1,
-    on_start = function(history, args)
+    on_start = function(history, args, insert_at)
         if not args then
-            return
+            return insert_at
         end
         -- Show the first short string value as a summary line
         for _, key in ipairs({ "url", "path", "file_path", "query", "command", "cmd" }) do
             local val = args[key]
             if type(val) == "string" and val ~= "" then
-                render_body_line(history, val)
-                return
+                return render_body_line(history, val, nil, insert_at)
             end
         end
         -- Fallback: first string arg that fits on one line
         for _, val in pairs(args) do
             if type(val) == "string" and val ~= "" and not val:find("\n") and #val <= 200 then
-                render_body_line(history, val)
-                return
+                return render_body_line(history, val, nil, insert_at)
             end
         end
+        return insert_at
     end,
     on_end = function(history, _, result, _, insert_at)
         local text = extract_result_text(result)

@@ -1349,34 +1349,34 @@ Note the distinction from regular widgets: `setWidget` calls with keys that **do
 
 ### Tool blocks
 
-When the agent invokes a tool, pi.nvim renders the call inline in the chat history as a **tool block**. Each block shows the tool name, its input summary, and its output, framed by a lightweight border in the gutter.
+When the agent invokes a tool, pi.nvim renders the call inline in the chat history as a **tool block**. Each block shows the tool name, its input summary, and its output, framed by a lightweight border in the gutter. The first line of the tool's input (the command, path, or first argument) rides on the header row; remaining input and output unfold below it.
 
 ```
-╭─ 󰻂 bash
-│  rg -n 'foo' lua/
+╭─ 󰻂 bash  rg -n 'foo' lua/
 ├────
 │  …12 lines
 │  lua/pi/init.lua:42: foo = 1
-╰─  completed
 ```
 
-The labels in the header and footer come from `labels.tool`, `labels.tool_success`, `labels.tool_failure` in your config. The success/failure icon on the bottom row reflects how the tool actually resolved (see [Status resolution](#status-resolution) below).
+Full blocks have no footer line. While a tool is running its header uses the `labels.tool` icon; once it resolves, the icon is swapped for `labels.tool_success` or `labels.tool_failure` and the header color follows the status (see [Status resolution](#status-resolution) below).
 
 #### Inline vs full blocks
 
 Tools come in two rendering styles:
 
-- **Inline tools** render as a single line. `read` is the canonical example — it shows `read path/to/file (42 lines)` and stays on one line even when the file is huge, because inlining the content would just be noise. Consecutive inline tool calls are grouped without blank lines between them.
+- **Inline tools** render as a single line. `read` is the canonical example — it shows `read path/to/file` and stays on one line even when the file is huge, because inlining the content would just be noise. If the detail is wider than the window it is truncated with `...`; expanding the line with `<Tab>` reveals the full detail.
 - **Full-block tools** get the multi-line bordered block shown above. `bash`, `edit`, `write`, and any tool pi.nvim doesn't have a dedicated renderer for fall into this category.
+
+While a tool is running, pi.nvim only writes its header line to the buffer. The input rendering, any streaming partial output, and the final result are buffered and flushed together once the tool finishes, so a long-running tool doesn't rewrite the buffer on every update. The first input line then lands on the header row and the rest of the block unfolds below it. If that first line is wider than the window it is truncated with `...` while the block is collapsed, and restored in full when the block is expanded. The same applies to inline tools — the trailing detail appears when the tool resolves.
 
 #### Auto-collapse and `<Tab>`
 
 Every full-block tool has two collapse thresholds:
 
-- `input_visible` — how many lines of the input/arguments to show when collapsed. Extra lines become `+N lines`.
+- `input_visible` — how many extra lines of the input/arguments to show below the header when collapsed. The first input line always rides on the header row, so it doesn't count against this threshold. Extra lines become `+N lines`.
 - `output_visible` — how many lines of the tool output to show when collapsed. `output_visible = 0` hides the output section entirely when collapsed (used for `edit`/`write` where the diff is the input).
 
-When a tool's input or output exceeds its threshold, the block is auto-collapsed on first render. You can toggle between the collapsed and fully-expanded view with `<Tab>` while the cursor is on the block in the history buffer. The same `<Tab>` also toggles the [Startup block](#startup-block) when the cursor is on that instead — pi.nvim dispatches based on what you're hovering over.
+When a tool's input or output exceeds its threshold, the block is auto-collapsed on first render. You can toggle between the collapsed and fully-expanded view with `<Tab>` while the cursor is on the block in the history buffer. Inline tools whose detail was truncated are toggleable the same way — expanding reveals the full detail. The same `<Tab>` also toggles the [Startup block](#startup-block) when the cursor is on that instead — pi.nvim dispatches based on what you're hovering over.
 
 Bind `pi.toggle_history_blocks()` to expand/collapse all expandable history blocks at once; the [Keymaps](#keymaps) example uses `<C-o>`.
 
@@ -1384,7 +1384,7 @@ Built-in thresholds:
 
 | Tool | `input_visible` | `output_visible` | Notes |
 | --- | --- | --- | --- |
-| `bash` | 1 | 1 | Shows first line of command + first line of output when collapsed |
+| `bash` | 1 | 0 | Command rides on the header row; output hidden when collapsed |
 | `read` | — | — | Always inline |
 | `edit` | unlimited | 0 | Renders the proposed diff as input; no separate output section |
 | `write` | unlimited | 0 | Same shape as `edit` for a whole-file write |

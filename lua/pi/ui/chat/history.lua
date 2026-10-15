@@ -21,6 +21,7 @@
 ---@field _thinking_accum pi.ThinkingAccum?
 ---@field _thinking_blocks pi.ThinkingBlock[]
 ---@field _tool_blocks table<string, pi.ToolBlock>
+---@field _pending_tool_header { row: integer, filled: boolean, info?: string, info_extmark?: integer }?
 ---@field _compaction_blocks pi.CompactionBlock[]
 ---@field _blocks_expanded boolean
 ---@field _placeholder_extmark integer?
@@ -57,13 +58,17 @@ History.__index = History
 ---@class pi.ToolBlock
 ---@field tool_name string
 ---@field icon_extmark integer
----@field tail_extmark? integer marks last row of block after on_start; used for positional insertion in on_tool_end
----@field live_update_extmark? integer marks first row of live partial output
----@field live_update_line_count? integer number of live partial output rows
 ---@field output_extmark? integer
----@field end_extmark? integer
+---@field live_text? string latest partial output text, cached while the tool runs
+---@field end_extmark? integer marks last row of block (inclusive); set in on_tool_end
 ---@field tool_input? table
 ---@field inline? boolean
+---@field header_has_input? boolean first input line was rendered on the header row
+---@field header_prefix? string icon + tool name portion of the header
+---@field header_info? string full first input line shown on the header
+---@field header_info_width? integer display width available for the header info
+---@field header_info_truncated? string truncated first input line for the collapsed state
+---@field header_info_extmark? integer
 ---@field finished? boolean
 ---@field expanded? boolean
 ---@field expanded_inner_lines? string[]
@@ -1059,7 +1064,6 @@ function History:on_agent_start(timestamp)
         self._first_delta = true
         self._agent_text_chunks = {}
         self._needs_separator = false
-        self._last_was_inline = false
         self:_pick_spinner()
         local time_str = format_time(timestamp or (os.time() * 1000))
         -- No trailing blank row: the separator is added lazily by the first
@@ -1107,7 +1111,6 @@ function History:on_text_delta(delta)
             -- Tables in the agent response are scanned from the first text row.
             self._agent_text_start_row = sep_start + 1
         end
-        self._last_was_inline = false
         if self._agent_text_chunks then
             self._agent_text_chunks[#self._agent_text_chunks + 1] = delta
         end
@@ -1751,16 +1754,14 @@ function History:on_tool_start(tool_name, tool_call_id, tool_input)
         local icon = Config.options.labels.tool
         local renderer = Tools.get_renderer(tool_name)
 
-        -- Inline tools render as a single line: icon + tool_name + detail
+        -- Inline tools render as a single line: icon + tool_name.
+        -- The detail (path etc.) is deferred until the tool finishes.
         if renderer.inline then
-            local detail = renderer.inline_text and renderer.inline_text(tool_input) or nil
-            local line = icon .. " " .. tool_name .. (detail and ("  " .. detail) or "")
+            local line = icon .. " " .. tool_name
 
-            -- Skip blank line between consecutive inline tools
-            local need_gap = not self._last_was_inline
             local last_line = vim.api.nvim_buf_line_count(self._buf) - 1
             local cur = vim.api.nvim_buf_get_lines(self._buf, last_line, last_line + 1, false)[1] or ""
-            local lines = (cur == "" or not need_gap) and { line } or { "", line }
+            local lines = cur == "" and { line } or { "", line }
             local start = self:_append_lines(lines)
             local row = lines[1] == "" and start + 1 or start
 
@@ -1774,14 +1775,6 @@ function History:on_tool_start(tool_name, tool_call_id, tool_input)
                 end_col = #icon + 1 + #tool_name,
                 hl_group = "PiToolHeader",
             })
-            -- Detail (path etc.) in subdued color
-            if detail then
-                local detail_start = #icon + 1 + #tool_name + 2
-                vim.api.nvim_buf_set_extmark(self._buf, ns, row, detail_start, {
-                    end_col = #line,
-                    hl_group = "PiToolCall",
-                })
-            end
 
             if tool_call_id then
                 self._tool_blocks[tool_call_id] = {
@@ -1792,15 +1785,15 @@ function History:on_tool_start(tool_name, tool_call_id, tool_input)
                 }
             end
 
-            self._last_was_inline = true
             self:_update_status_extmark()
             self:_maybe_scroll()
             return
         end
 
-        self._last_was_inline = false
-
-        -- Standard multi-line tool block
+        -- Standard multi-line tool block.
+        -- Only the header is written while the tool runs. Input rendering,
+        -- partial output and the final result are cached/deferred and flushed
+        -- in on_tool_end so the buffer isn't rewritten during execution.
         local header = icon .. " " .. tool_name
 
         local last_line = vim.api.nvim_buf_line_count(self._buf) - 1
@@ -1819,19 +1812,16 @@ function History:on_tool_start(tool_name, tool_call_id, tool_input)
             hl_group = "PiToolHeader",
         })
 
-        if renderer.on_start then
-            renderer.on_start(self, tool_input)
+        -- Side-effectful renderer work (e.g. snapshotting a file before write)
+        -- must still happen before the tool executes.
+        if renderer.prepare then
+            renderer.prepare(self, tool_input)
         end
 
         if tool_call_id then
-            -- tail_extmark marks the last row of the block after on_start.
-            -- on_tool_end uses it to insert output at the right position
-            -- when multiple tools run in parallel.
-            local tail_row = vim.api.nvim_buf_line_count(self._buf) - 1
             self._tool_blocks[tool_call_id] = {
                 tool_name = tool_name,
                 icon_extmark = icon_extmark,
-                tail_extmark = vim.api.nvim_buf_set_extmark(self._buf, ns, tail_row, 0, {}),
                 tool_input = tool_input,
                 expanded = true,
             }
@@ -1860,44 +1850,61 @@ function History:on_tool_end(tool_name, tool_call_id, result, is_error)
         end
         if block then
             block.finished = true
-            self:_delete_tool_live_update(block)
         end
 
-        -- Inline tools: append status indicator to the existing line
+        local renderer = Tools.get_renderer(tool_name)
+
+        -- Inline tools: rebuild the single line with the detail that was
+        -- deferred while running and the icon for the resolved status.
         if block and block.inline then
+            local pos = vim.api.nvim_buf_get_extmark_by_id(self._buf, ns, block.icon_extmark, {})
+            local row = pos[1]
+            if not row then
+                return
+            end
             local labels = Config.options.labels
             local status = Tools.resolve_status(result, is_error)
             local is_success = status == "completed"
-            local icon_hl = is_success and "PiToolHeader" or "PiToolError"
             local status_icon = is_success and labels.tool_success or labels.tool_failure
-            local status_hl = is_success and "PiToolStatus" or "PiToolError"
-
-            -- Update icon color
-            local icon = Config.options.labels.tool
-            local pos = vim.api.nvim_buf_get_extmark_by_id(self._buf, ns, block.icon_extmark, {})
-            if not pos[1] then
-                return
+            local full_detail = renderer.inline_text and renderer.inline_text(block.tool_input) or nil
+            local header = status_icon .. " " .. tool_name
+            local detail = full_detail
+            if detail then
+                local max_width = self:_tool_content_width()
+                if max_width > 0 then
+                    local detail_width = math.max(max_width - vim.fn.strdisplaywidth(header) - 2, 0)
+                    detail = Tools.truncate_line(detail, detail_width)
+                end
             end
-            vim.api.nvim_buf_set_extmark(self._buf, ns, pos[1], 0, {
-                id = block.icon_extmark,
-                end_col = #icon,
-                hl_group = icon_hl,
-            })
+            local line = header .. (detail and ("  " .. detail) or "")
 
-            -- Append status as virtual text at end of line
-            local renderer = Tools.get_renderer(tool_name)
-            local extra = renderer.inline_status and renderer.inline_status(result, is_error) or nil
-            local row = pos[1]
-            local line = vim.api.nvim_buf_get_lines(self._buf, row, row + 1, false)[1] or ""
-            local virt = {}
-            if extra then
-                virt[#virt + 1] = { " " .. extra, "PiToolStatus" }
+            vim.api.nvim_buf_clear_namespace(self._buf, ns, row, row + 1)
+            self:_with_modifiable(function()
+                vim.api.nvim_buf_set_lines(self._buf, row, row + 1, false, { line })
+            end)
+            Tools.set_border(self, row, Tools.GLYPHS.MID)
+            self:_set_tool_header_marks(block, row, status_icon, is_success)
+            block.header_info_extmark = nil
+            if detail then
+                block.header_info_extmark = vim.api.nvim_buf_set_extmark(self._buf, ns, row, #header + 2, {
+                    end_col = #line,
+                    hl_group = "PiToolCall",
+                })
             end
-            virt[#virt + 1] = { "  " .. status_icon, status_hl }
-            vim.api.nvim_buf_set_extmark(self._buf, ns, row, #line, {
-                virt_text = virt,
-                virt_text_pos = "inline",
-            })
+
+            -- When the detail had to be truncated, model the line as a block
+            -- with no inner lines so toggling can reveal the full text.
+            if full_detail and detail ~= full_detail then
+                block.header_prefix = header
+                block.header_info = full_detail
+                block.header_info_truncated = detail
+                block.expanded_inner_lines = {}
+                block.expanded_inner_extmarks = {}
+                block.collapsed_inner_lines = {}
+                block.collapsed_specs = {}
+                block.end_extmark = vim.api.nvim_buf_set_extmark(self._buf, ns, row, 0, {})
+                block.expanded = false
+            end
 
             self._needs_separator = true
             self:_update_status_extmark()
@@ -1907,21 +1914,64 @@ function History:on_tool_end(tool_name, tool_call_id, result, is_error)
             return
         end
 
-        -- Compute insertion point: after the tool block's on_start content.
-        -- When tools run in parallel, multiple headers are appended before
-        -- any on_tool_end fires, so we must insert output at the correct
-        -- position rather than appending at the buffer end.
+        -- Deferred rendering: nothing was written while the tool ran. Everything
+        -- is flushed now, starting from the block's header row, which matters
+        -- when tools run in parallel.
         local insert_at ---@type integer?
-        if block and block.tail_extmark then
-            local tail_pos = vim.api.nvim_buf_get_extmark_by_id(self._buf, ns, block.tail_extmark, {})
-            if tail_pos[1] then
-                insert_at = tail_pos[1] + 1
+        local header_row ---@type integer?
+        if block then
+            local pos = vim.api.nvim_buf_get_extmark_by_id(self._buf, ns, block.icon_extmark, {})
+            if pos[1] then
+                header_row = pos[1]
+                insert_at = header_row + 1
+            end
+        end
+        insert_at = insert_at or vim.api.nvim_buf_line_count(self._buf)
+
+        -- Fall back to the last partial output when the final result is absent.
+        if block and block.live_text and result == nil then
+            result = { content = { { type = "text", text = block.live_text } } }
+        end
+
+        local status = Tools.resolve_status(result, is_error)
+        local is_success = status == "completed"
+
+        -- The header icon reflects how the tool resolved; status is conveyed by
+        -- both the glyph and the header color (no footer line).
+        local header_info_width = 0
+        if block and header_row then
+            local status_icon = is_success and Config.options.labels.tool_success or Config.options.labels.tool_failure
+            local header = status_icon .. " " .. tool_name
+            vim.api.nvim_buf_clear_namespace(self._buf, ns, header_row, header_row + 1)
+            self:_with_modifiable(function()
+                vim.api.nvim_buf_set_lines(self._buf, header_row, header_row + 1, false, { header })
+            end)
+            Tools.set_border(self, header_row, Tools.GLYPHS.TOP)
+            self:_set_tool_header_marks(block, header_row, status_icon, is_success)
+            block.header_prefix = header
+            -- Space left for the first input line after the header prefix.
+            local max_width = self:_tool_content_width()
+            if max_width > 0 then
+                header_info_width = math.max(max_width - vim.fn.strdisplaywidth(header) - 2, 0)
             end
         end
 
+        -- The first rendered input line rides on the header row; the rest render
+        -- below it, so the block starts at the header when expanded.
+        self._pending_tool_header = header_row and { row = header_row, filled = false } or nil
+        if renderer.on_start then
+            insert_at = renderer.on_start(self, block and block.tool_input, insert_at)
+            if block and self._pending_tool_header and self._pending_tool_header.filled then
+                block.header_has_input = true
+                block.header_info = self._pending_tool_header.info
+                block.header_info_extmark = self._pending_tool_header.info_extmark
+                block.header_info_width = header_info_width
+            end
+        end
+        self._pending_tool_header = nil
+
         local output_start = insert_at or vim.api.nvim_buf_line_count(self._buf)
 
-        local renderer = Tools.get_renderer(tool_name)
         if renderer.on_end then
             insert_at = renderer.on_end(self, block and block.tool_input, result, is_error, insert_at)
         end
@@ -1932,35 +1982,9 @@ function History:on_tool_end(tool_name, tool_call_id, result, is_error)
             block.output_extmark = vim.api.nvim_buf_set_extmark(self._buf, ns, output_start, 0, {})
         end
 
-        local labels = Config.options.labels
-        local status = Tools.resolve_status(result, is_error)
-        local is_success = status == "completed"
-        local footer = is_success and (labels.tool_success .. " completed") or (labels.tool_failure .. " " .. status)
-        local footer_hl = is_success and "PiToolStatus" or "PiToolError"
-        local start
-        if insert_at then
-            start, insert_at = self:_insert_lines(insert_at, { footer })
-        else
-            start = self:_append_lines({ footer })
-        end
-        Tools.set_border(self, start, Tools.GLYPHS.BOT)
-        local footer_extmark = vim.api.nvim_buf_set_extmark(self._buf, ns, start, 0, {
-            end_col = #footer,
-            hl_group = footer_hl,
-        })
-
         if block then
-            local icon_hl = is_success and "PiToolHeader" or "PiToolError"
-            local icon = Config.options.labels.tool
-            local pos = vim.api.nvim_buf_get_extmark_by_id(self._buf, ns, block.icon_extmark, {})
-            if pos[1] then
-                vim.api.nvim_buf_set_extmark(self._buf, ns, pos[1], 0, {
-                    id = block.icon_extmark,
-                    end_col = #icon,
-                    hl_group = icon_hl,
-                })
-            end
-            block.end_extmark = footer_extmark
+            -- end_extmark marks the block's last row (inclusive).
+            block.end_extmark = vim.api.nvim_buf_set_extmark(self._buf, ns, output_end - 1, 0, {})
             block.expanded = true
             self:_maybe_collapse_tool(tool_call_id)
         end
@@ -1973,43 +1997,132 @@ function History:on_tool_end(tool_name, tool_call_id, result, is_error)
     end)
 end
 
+--- Resolve the header row and inclusive last row of a finished tool block.
+---@param block pi.ToolBlock
+---@return integer? header_row
+---@return integer? last_row
+function History:_tool_block_rows(block)
+    if not block.end_extmark then
+        return nil, nil
+    end
+    local header_row = vim.api.nvim_buf_get_extmark_by_id(self._buf, ns, block.icon_extmark, {})[1]
+    local last_row = vim.api.nvim_buf_get_extmark_by_id(self._buf, ns, block.end_extmark, {})[1]
+    return header_row, last_row
+end
+
+--- Re-anchor a tool block's end_extmark after its inner rows were replaced.
+---@param block pi.ToolBlock
+---@param last_row integer 0-indexed
+function History:_set_tool_block_last_row(block, last_row)
+    block.end_extmark = vim.api.nvim_buf_set_extmark(self._buf, ns, last_row, 0, { id = block.end_extmark })
+end
+
+--- Display width available for a tool block's content, accounting for the
+--- gutter border and fold column. Returns 0 when the window is unknown.
+---@return integer
+function History:_tool_content_width()
+    if not self._win or not vim.api.nvim_win_is_valid(self._win) then
+        return 0
+    end
+    local win_width = vim.api.nvim_win_get_width(self._win)
+    local border_w = vim.fn.strdisplaywidth(Tools.GLYPHS.MID)
+    local gutter_w = tonumber(vim.wo[self._win].foldcolumn) or 0
+    return math.max(win_width - border_w - gutter_w - border_w, 0)
+end
+
+--- Re-anchor a tool block's header extmarks after its header row was rewritten.
+--- The status icon picks up the error highlight when the tool did not
+--- complete, so the header color follows the resolved status.
+---@param block pi.ToolBlock
+---@param row integer 0-indexed header row
+---@param status_icon string
+---@param is_success boolean
+function History:_set_tool_header_marks(block, row, status_icon, is_success)
+    block.icon_extmark = vim.api.nvim_buf_set_extmark(self._buf, ns, row, 0, {
+        end_col = #status_icon,
+        hl_group = is_success and "PiToolHeader" or "PiToolError",
+    })
+    vim.api.nvim_buf_set_extmark(self._buf, ns, row, #status_icon, {
+        end_col = #status_icon + 1 + #block.tool_name,
+        hl_group = "PiToolHeader",
+    })
+end
+
+--- Swap the first-input text on a tool block's header between its full and
+--- truncated forms. No-op when the block has no header info.
+---@param block pi.ToolBlock
+---@param truncated boolean
+function History:_set_tool_header_info(block, truncated)
+    if not block.header_info or not block.header_prefix then
+        return
+    end
+    local pos = vim.api.nvim_buf_get_extmark_by_id(self._buf, ns, block.icon_extmark, {})
+    local row = pos[1]
+    if not row then
+        return
+    end
+    local text = truncated and (block.header_info_truncated or block.header_info) or block.header_info
+    local prefix_len = #block.header_prefix + 2
+
+    if block.header_info_extmark then
+        pcall(vim.api.nvim_buf_del_extmark, self._buf, ns, block.header_info_extmark)
+        block.header_info_extmark = nil
+    end
+
+    local cur = vim.api.nvim_buf_get_lines(self._buf, row, row + 1, false)[1] or ""
+    self:_with_modifiable(function()
+        vim.api.nvim_buf_set_text(self._buf, row, prefix_len, row, #cur, { text })
+    end)
+
+    if #text > 0 then
+        block.header_info_extmark = vim.api.nvim_buf_set_extmark(self._buf, ns, row, prefix_len, {
+            end_col = prefix_len + #text,
+            hl_group = "PiToolCall",
+        })
+    end
+end
+
 --- Collapse a tool block based on per-renderer visible line thresholds.
 ---@param tool_call_id string
 function History:_maybe_collapse_tool(tool_call_id)
     local block = self._tool_blocks[tool_call_id]
-    if not block or not block.end_extmark then
+    if not block then
         return
     end
 
-    local header_pos = vim.api.nvim_buf_get_extmark_by_id(self._buf, ns, block.icon_extmark, {})
-    local footer_pos = vim.api.nvim_buf_get_extmark_by_id(self._buf, ns, block.end_extmark, {})
-    local header_row = header_pos[1]
-    local footer_row = footer_pos[1]
-    if not header_row or not footer_row then
+    local header_row, last_row = self:_tool_block_rows(block)
+    if not header_row or not last_row then
         return
     end
     local inner_start = header_row + 1
+    local inner_end = last_row + 1 -- exclusive
 
     local renderer = Tools.get_renderer(block.tool_name)
     local input_vis = renderer.input_visible or math.huge
     local output_vis = renderer.output_visible or math.huge
 
+    -- The first input line rides on the header row, so it does not count
+    -- against input_visible.
+    if block.header_has_input and input_vis ~= math.huge then
+        input_vis = math.max(input_vis - 1, 0)
+    end
+
     local input_lines, output_lines, has_output = Tools.extract_tool_sections(self, block)
     -- Subtract border glyph width so truncation accounts for inline virt_text
-    local win_width = self._win and vim.api.nvim_win_is_valid(self._win) and vim.api.nvim_win_get_width(self._win) or 0
-    local border_w = vim.fn.strdisplaywidth(Tools.GLYPHS.MID)
-    local gutters = (self._win and vim.wo[self._win].foldcolumn or "0")
-    local gutter_w = tonumber(gutters) or 0
-    local max_width = win_width > 0 and (win_width - border_w - gutter_w - border_w) or 0
+    local max_width = self:_tool_content_width()
     if not Tools.should_collapse(input_lines, output_lines, input_vis, output_vis, max_width) then
         return
     end
     local collapsed, specs =
         Tools.build_collapsed_view(input_lines, output_lines, has_output, input_vis, output_vis, max_width)
 
+    if block.header_has_input then
+        block.header_info_truncated = Tools.truncate_line(block.header_info or "", block.header_info_width or 0)
+    end
+
     -- Save expanded state
-    block.expanded_inner_lines = vim.api.nvim_buf_get_lines(self._buf, inner_start, footer_row, false)
-    block.expanded_inner_extmarks = capture_extmarks(self._buf, ns, inner_start, footer_row - 1)
+    block.expanded_inner_lines = vim.api.nvim_buf_get_lines(self._buf, inner_start, inner_end, false)
+    block.expanded_inner_extmarks = capture_extmarks(self._buf, ns, inner_start, last_row)
     block.collapsed_inner_lines = collapsed
     block.collapsed_specs = specs
 
@@ -2019,13 +2132,15 @@ function History:_maybe_collapse_tool(tool_call_id)
     end
 
     -- Replace inner content
-    vim.api.nvim_buf_clear_namespace(self._buf, ns, inner_start, footer_row)
+    vim.api.nvim_buf_clear_namespace(self._buf, ns, inner_start, inner_end)
     self:_with_modifiable(function()
-        vim.api.nvim_buf_set_lines(self._buf, inner_start, footer_row, false, collapsed)
+        vim.api.nvim_buf_set_lines(self._buf, inner_start, inner_end, false, collapsed)
     end)
     Tools.apply_collapsed_extmarks(self, inner_start, specs, collapsed)
+    self:_set_tool_block_last_row(block, inner_start + #collapsed - 1)
 
     block.expanded = false
+    self:_set_tool_header_info(block, true)
 end
 
 ---@param target_block pi.ToolBlock
@@ -2039,20 +2154,20 @@ function History:_set_tool_block_expanded(target_block, expanded)
         return false
     end
 
-    local header_row = vim.api.nvim_buf_get_extmark_by_id(self._buf, ns, target_block.icon_extmark, {})[1]
-    local footer_row = vim.api.nvim_buf_get_extmark_by_id(self._buf, ns, target_block.end_extmark, {})[1]
-    if not header_row or not footer_row then
+    local header_row, last_row = self:_tool_block_rows(target_block)
+    if not header_row or not last_row then
         return false
     end
     local inner_start = header_row + 1
+    local inner_end = last_row + 1 -- exclusive
 
-    vim.api.nvim_buf_clear_namespace(self._buf, ns, inner_start, footer_row)
+    vim.api.nvim_buf_clear_namespace(self._buf, ns, inner_start, inner_end)
+    local lines = expanded and target_block.expanded_inner_lines or target_block.collapsed_inner_lines
     self:_with_modifiable(function()
+        vim.api.nvim_buf_set_lines(self._buf, inner_start, inner_end, false, lines)
         if expanded then
-            vim.api.nvim_buf_set_lines(self._buf, inner_start, footer_row, false, target_block.expanded_inner_lines)
             restore_extmarks(self._buf, ns, inner_start, target_block.expanded_inner_extmarks)
         else
-            vim.api.nvim_buf_set_lines(self._buf, inner_start, footer_row, false, target_block.collapsed_inner_lines)
             Tools.apply_collapsed_extmarks(
                 self,
                 inner_start,
@@ -2061,7 +2176,9 @@ function History:_set_tool_block_expanded(target_block, expanded)
             )
         end
     end)
+    self:_set_tool_block_last_row(target_block, inner_start + #lines - 1)
     target_block.expanded = expanded
+    self:_set_tool_header_info(target_block, not expanded)
     return true
 end
 
@@ -2169,66 +2286,6 @@ local function extract_tool_update_text(msg)
     return trimmed ~= "" and trimmed or nil
 end
 
----@param text string
----@return string[]
-local function build_tool_live_update_lines(text)
-    local output_lines = vim.split(Tools.sanitize_text(text), "\n", { plain = true })
-    local fences = 0
-    for _, line in ipairs(output_lines) do
-        if line:match("^```") then
-            fences = fences + 1
-        end
-    end
-    if fences % 2 == 1 then
-        output_lines[#output_lines + 1] = "```"
-    end
-
-    local lines = { "" }
-    vim.list_extend(lines, output_lines)
-    return lines
-end
-
----@param start_row integer
----@param lines string[]
-function History:_apply_tool_live_update_extmarks(start_row, lines)
-    Tools.set_border(self, start_row, Tools.GLYPHS.SEP)
-    for i = 2, #lines do
-        local row = start_row + i - 1
-        local line = lines[i] or ""
-        Tools.set_border(self, row, Tools.GLYPHS.MID)
-        if #line > 0 then
-            vim.api.nvim_buf_set_extmark(self._buf, ns, row, 0, {
-                end_col = #line,
-                hl_group = "PiToolOutput",
-                priority = 200,
-            })
-        end
-    end
-end
-
----@param block pi.ToolBlock
-function History:_delete_tool_live_update(block)
-    if not block.live_update_extmark or not block.live_update_line_count then
-        return
-    end
-    local pos = vim.api.nvim_buf_get_extmark_by_id(self._buf, ns, block.live_update_extmark, {})
-    block.live_update_extmark = nil
-    local line_count = block.live_update_line_count
-    block.live_update_line_count = nil
-    local start_row = pos[1]
-    if not start_row then
-        return
-    end
-    local end_row = start_row + line_count
-    if end_row > vim.api.nvim_buf_line_count(self._buf) then
-        return
-    end
-    vim.api.nvim_buf_clear_namespace(self._buf, ns, start_row, end_row)
-    self:_with_modifiable(function()
-        vim.api.nvim_buf_set_lines(self._buf, start_row, end_row, false, {})
-    end)
-end
-
 ---@param tool_name string
 ---@param tool_call_id string
 ---@param msg table
@@ -2243,53 +2300,11 @@ function History:on_tool_update(tool_name, tool_call_id, msg)
             return
         end
 
+        -- Partial output is cached, not rendered. The tool's input and final
+        -- result are written to the buffer in a single pass in on_tool_end.
         local text = extract_tool_update_text(msg)
-        if not text then
-            return
-        end
-
-        local should_scroll = self:_should_auto_scroll()
-        local lines = build_tool_live_update_lines(text)
-        local start_row
-        local old_line_count = block.live_update_line_count
-        if block.live_update_extmark and old_line_count then
-            local pos = vim.api.nvim_buf_get_extmark_by_id(self._buf, ns, block.live_update_extmark, {})
-            start_row = pos[1]
-            if start_row then
-                local end_row = start_row + old_line_count
-                if end_row > vim.api.nvim_buf_line_count(self._buf) then
-                    return
-                end
-                vim.api.nvim_buf_clear_namespace(self._buf, ns, start_row, end_row)
-                self:_with_modifiable(function()
-                    vim.api.nvim_buf_set_lines(self._buf, start_row, end_row, false, lines)
-                end)
-            else
-                block.live_update_extmark = nil
-                block.live_update_line_count = nil
-            end
-        end
-
-        if not start_row then
-            if not block.tail_extmark then
-                return
-            end
-            local tail_pos = vim.api.nvim_buf_get_extmark_by_id(self._buf, ns, block.tail_extmark, {})
-            if not tail_pos[1] then
-                return
-            end
-            start_row = tail_pos[1] + 1
-            self:_with_modifiable(function()
-                vim.api.nvim_buf_set_lines(self._buf, start_row, start_row, false, lines)
-            end)
-        end
-
-        block.live_update_extmark = vim.api.nvim_buf_set_extmark(self._buf, ns, start_row, 0, {})
-        block.live_update_line_count = #lines
-        self:_apply_tool_live_update_extmarks(start_row, lines)
-        self:_update_status_extmark()
-        if should_scroll then
-            self:_scroll_to_bottom()
+        if text then
+            block.live_text = text
         end
     end)
 end
