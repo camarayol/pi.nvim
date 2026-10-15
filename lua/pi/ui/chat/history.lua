@@ -52,6 +52,7 @@ History.__index = History
 ---@field aligns ("left"|"center"|"right")[] per-column alignment
 ---@field rows string[][] data rows, each a list of cell texts
 ---@field widths integer[] display width per column
+---@field indent string leading whitespace of the source lines (tool output rows are indented)
 
 ---@class pi.ToolBlock
 ---@field tool_name string
@@ -112,6 +113,7 @@ local Tools = require("pi.ui.chat.tools")
 
 local ns = vim.api.nvim_create_namespace("pi-chat")
 
+local INDENT = "  "
 local SCROLL_THRESHOLD = 10
 local STARTUP_HL_PRIORITY = 200
 
@@ -317,6 +319,7 @@ local function parse_table(lines, buf_start_row)
         widths[j] = math.max(widths[j], 1)
     end
     return {
+        indent = lines[1]:match("^%s*"),
         start_row = buf_start_row,
         end_row = buf_start_row + #lines - 1,
         header = header,
@@ -644,6 +647,17 @@ function History:_append_text(text)
     local cur = vim.api.nvim_buf_get_lines(self._buf, last_line, last_line + 1, false)[1] or ""
     local col = #cur
     local lines = vim.split(text, "\n", { plain = true })
+    -- Agent message rows use the same body indent as tool rows. The indent is
+    -- added only when the delta starts a fresh row — a delta continuing a
+    -- partially streamed line (col > 0) must not re-indent it.
+    if cur == "" and lines[1] ~= "" then
+        lines[1] = INDENT .. lines[1]
+    end
+    for i = 2, #lines do
+        if lines[i] ~= "" then
+            lines[i] = INDENT .. lines[i]
+        end
+    end
     self:_with_modifiable(function()
         vim.api.nvim_buf_set_text(self._buf, last_line, col, last_line, col, lines)
     end)
@@ -896,16 +910,18 @@ function History:_render_md_table(tbl)
     local widths = tbl.widths
     local aligns = tbl.aligns
 
-    -- Build replacement lines (same count as original).
+    local indent = tbl.indent
+
+    -- Build replacement lines (same count as original), keeping the source indent.
     local new_lines = {}
-    new_lines[1] = table_row(tbl.header, widths, aligns)
-    new_lines[2] = table_border(widths, "├", "┼", "┤", "─")
+    new_lines[1] = indent .. table_row(tbl.header, widths, aligns)
+    new_lines[2] = indent .. table_border(widths, "├", "┼", "┤", "─")
     for _, row in ipairs(tbl.rows) do
-        new_lines[#new_lines + 1] = table_row(row, widths, aligns)
+        new_lines[#new_lines + 1] = indent .. table_row(row, widths, aligns)
     end
 
-    local top = table_border(widths, "┌", "┬", "┐", "─")
-    local bot = table_border(widths, "└", "┴", "┘", "─")
+    local top = indent .. table_border(widths, "┌", "┬", "┐", "─")
+    local bot = indent .. table_border(widths, "└", "┴", "┘", "─")
 
     -- Replace buffer lines.
     self:_with_modifiable(function()
@@ -984,11 +1000,14 @@ function History:add_user_message(msg, timestamp, image_count, queue_type)
         local label_line = label .. queue_tag
         local lead = self:_block_lead()
         local lines = vim.list_extend(vim.deepcopy(lead), { label_line, "" })
-        vim.list_extend(lines, msg_lines)
+        for _, line in ipairs(msg_lines) do
+            lines[#lines + 1] = line ~= "" and (INDENT .. line) or ""
+        end
         if image_count and image_count > 0 then
             local info = format_attachment_info(image_count)
             lines[#lines + 1] = ""
-            lines[#lines + 1] = info
+            -- Indented like the rest of the message body.
+            lines[#lines + 1] = INDENT .. info
         end
         local start = self:_append_lines(lines)
         local label_row = start + #lead
@@ -1265,7 +1284,7 @@ end
 --- Build the welcome header used by both compact and expanded startup views.
 ---@return string[], pi.HighlightMark[]
 function History:_build_startup_header()
-    local welcome = "  Welcome to pi.nvim! Use @file to mention files or /command for shortcuts."
+    local welcome = INDENT .. "Welcome to pi.nvim! Use @file to mention files or /command for shortcuts."
     local lines = { welcome, "" } ---@type string[]
     local marks = {} ---@type pi.HighlightMark[]
     marks[#marks + 1] = { row = 0, col_start = 0, col_end = #welcome, hl = "PiWelcomeHint" }
@@ -1303,11 +1322,11 @@ function History:_build_compact_startup()
             .. (announcement_count > 1 and "s" or "")
             .. " reported startup info"
     end
-    local summary = "     Loaded resources: " .. table.concat(parts, ", ")
+    local summary = "  Loaded resources: " .. table.concat(parts, ", ")
     lines[#lines + 1] = summary
     marks[#marks + 1] = { row = #lines - 1, col_start = 0, col_end = #summary, hl = "PiStartupDetail" }
 
-    local hint = "     Run :PiToggleStartupDetails to expand the details or focus this block and hit Tab"
+    local hint = INDENT .. "Run :PiToggleStartupDetails to expand the details or focus this block and hit Tab"
     lines[#lines + 1] = hint
     marks[#marks + 1] = { row = #lines - 1, col_start = 0, col_end = #hint, hl = "PiStartupHint" }
 
@@ -1319,17 +1338,17 @@ end
 function History:_build_expanded_startup()
     local lines, marks = self:_build_startup_header()
 
-    local intro = "     Loaded resources:"
+    local intro = INDENT .. "Loaded resources:"
     lines[#lines + 1] = intro
     marks[#marks + 1] = { row = #lines - 1, col_start = 0, col_end = #intro, hl = "PiStartupDetail" }
 
     for _, section in ipairs(self._startup_sections) do
         lines[#lines + 1] = ""
-        local header_line = "     " .. section.header
+        local header_line = INDENT .. section.header
         lines[#lines + 1] = header_line
         marks[#marks + 1] = { row = #lines - 1, col_start = 0, col_end = #header_line, hl = "PiStartupDetail" }
         for _, item in ipairs(section.items) do
-            local item_line = "     " .. item
+            local item_line = INDENT .. item
             lines[#lines + 1] = item_line
             marks[#marks + 1] = { row = #lines - 1, col_start = 0, col_end = #item_line, hl = "PiStartupDetail" }
         end
@@ -1367,13 +1386,17 @@ function History:_build_startup_error_lines(base_row)
         }
         local error_lines = vim.split(entry.message, "\n", { plain = true })
         for _, line in ipairs(error_lines) do
-            lines[#lines + 1] = line
-            marks[#marks + 1] = {
-                row = base_row + #lines - 1,
-                col_start = 0,
-                col_end = #line,
-                hl = "PiStartupError",
-            }
+            -- Error bodies are indented like every other message body.
+            local body_line = line ~= "" and (INDENT .. line) or ""
+            lines[#lines + 1] = body_line
+            if #body_line > 0 then
+                marks[#marks + 1] = {
+                    row = base_row + #lines - 1,
+                    col_start = 0,
+                    col_end = #body_line,
+                    hl = "PiStartupError",
+                }
+            end
         end
     end
     return lines, marks
